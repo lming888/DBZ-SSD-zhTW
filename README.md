@@ -1,3 +1,26 @@
+> **這個 Fork 的 Android 顯示功能，是為 Samsung DeX 接 CRT-TV 的復古遊玩配置而設。**
+>
+> 用 Samsung 手機運行遊戲，經有線 Samsung DeX 輸出至真正的 CRT 電視，享受映像管自然產生的掃描線與復古觀感，同時保留加強模式及 HD 美術帶來的遊戲體驗。
+
+**訊號接法**
+
+`支援有線 Samsung DeX 的手機 → USB-C 轉 HDMI → HDMI 輸入／S-Video 輸出的主動式轉換器 → CRT-TV`
+
+HDMI 的數位訊號須由轉換器轉成 S-Video 類比訊號，再接到 CRT；不是使用反方向的轉換器或單純的轉接線。
+
+**設定方法**
+
+1. 先到 App 的觸控選單 `MENU → Options`，將「畫面（Picture）」切換為「拉伸（Stretch）」。
+2. 再到遊戲內選單 `Options → Video`，將「長寬比（Aspect）」設為 `4:3`。
+3. 同一頁將「顯示（Display）」設為「全螢幕（Fullscreen）」。
+4. 啟用有線 Samsung DeX，按上述 `Android → HDMI → S-Video → CRT` 訊號鏈連接電視，開始遊玩。
+
+**為甚麼加入拉伸模式？** 這個模式正是為擁有以上配置的玩家而加入：讓 Android／DeX 的輸出配合 4:3 CRT，目標是把真實、自然的 CRT 掃描線，與 HD 美術及加強模式結合，打造專屬這套配置的「Perfect Retro」體驗。
+
+> **硬體與版本注意**：手機必須支援有線 DeX，轉換器與電視也須相容；實際比例與掃描線觀感會受硬體及輸出制式影響。此處的 HD 體驗指遊戲美術與內部渲染，S-Video 傳送到 CRT 的仍是類比標清訊號，並非真正的 HD 輸出。以上設定需要包含「拉伸」及 CRT 比例修正的新版 Android 建置，不代表現有 RC2 下載已包含這些改動。
+
+---
+
 # 七龍珠Z 超賽亞傳說　繁體中文 Remaster（台灣、香港）
 
 English: [README.en.md](README.en.md)

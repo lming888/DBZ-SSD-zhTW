@@ -12,7 +12,7 @@ use super::{
     game_views, hd_layer, header_status, new_machine, note_wram, window_frames,
 };
 use crate::egui_input::InputAdapter;
-use crate::hd::Hd;
+use crate::filter::Shape;
 use crate::hook_setup::{HookSetup, HookSwitch, HooksArg};
 use crate::hotkeys::Speed;
 use crate::panel::{Controls, HooksSwitch};
@@ -261,7 +261,7 @@ fn run_one(
         let symbols = env.symbols();
         let history = &state.history;
         let panel = &mut state.panel;
-        let mut hd_art = state.hd.as_mut().map(Hd::art);
+        let mut hd_art = state.hd.as_mut().map(|hd| hd.art(Shape::default()));
         let mut actions = Vec::new();
         let shown: &ssd_oracle::Machine = &machine;
         let views_time = views_started.elapsed();

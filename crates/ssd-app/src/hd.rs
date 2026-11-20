@@ -6,6 +6,8 @@
 //! cached ROM the first time they are drawn and kept as egui textures for the run. The field as it
 //! was when the menu opened is kept too: it is the backdrop the HD paints behind its windows.
 
+use crate::canvas::GameView;
+use crate::filter::{self, Shape};
 use crate::paths;
 use crate::theme;
 use anyhow::Context;
@@ -214,6 +216,7 @@ impl Hd {
                 hand_textures: HashMap::new(),
                 textures: HashMap::new(),
                 field: None,
+                backdrop_shape: Shape::default(),
                 backdrop: None,
             },
             wide: {
@@ -684,9 +687,10 @@ impl Hd {
         }
     }
 
-    /// The textures of the pictures and of the backdrop, for painting.
+    /// The textures for painting, with the same last pass on the backdrop as on the live picture.
     #[must_use]
-    pub fn art(&mut self) -> &mut Art {
+    pub fn art(&mut self, shape: Shape) -> &mut Art {
+        self.art.backdrop_shape = shape;
         &mut self.art
     }
 }
@@ -719,8 +723,9 @@ pub struct Art {
     hand_textures: HashMap<(Vec<u16>, CardPart), Option<egui::TextureHandle>>,
     textures: HashMap<Picture, Option<egui::TextureHandle>>,
     field: Option<FieldImage>,
-    /// The texture of the field at a generation, uploaded when it is first painted.
-    backdrop: Option<(u64, egui::TextureHandle)>,
+    backdrop_shape: Shape,
+    /// The texture of the field at a generation and video shape, uploaded when it is first painted.
+    backdrop: Option<(u64, Shape, egui::TextureHandle)>,
 }
 
 impl Art {
@@ -736,6 +741,7 @@ impl Art {
             hand_textures: HashMap::new(),
             textures: HashMap::new(),
             field: None,
+            backdrop_shape: Shape::default(),
             backdrop: None,
         }
     }
@@ -769,29 +775,53 @@ impl Art {
         self.field = Some(FieldImage { generation, source });
     }
 
-    /// The texture of the backdrop, uploaded if the field changed since it was last painted; `None`
-    /// before any field was copied. It is painted over the game picture, in the same rect.
+    /// The texture of the backdrop, uploaded if the field or video shape changed; `None` before any field was
+    /// copied. The 4:3 crop and filters match the live picture before it is painted in the same rect.
     fn backdrop(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
         let field = self.field.as_ref()?;
-        let (width, height, rgba) = match &field.source {
-            FieldSource::Pixels { width, height, rgba } => (*width, *height, rgba.as_slice()),
+        let (width, height, rgba, logical) = match &field.source {
+            FieldSource::Pixels { width, height, rgba } => (*width, *height, rgba.as_slice(), None),
             FieldSource::Picture(shared) => {
                 let picture = &shared.picture.picture;
-                (picture.width, picture.height, picture.rgba.as_slice())
+                (
+                    picture.width,
+                    picture.height,
+                    picture.rgba.as_slice(),
+                    Some([
+                        picture.logical.x,
+                        picture.logical.y,
+                        picture.logical.width,
+                        picture.logical.height,
+                    ]),
+                )
             }
         };
         if width == 0 || height == 0 {
             return None;
         }
-        let stale =
-            self.backdrop.as_ref().is_none_or(|(generation, _)| *generation != field.generation);
+        let stale = self.backdrop.as_ref().is_none_or(|(generation, shape, _)| {
+            *generation != field.generation || *shape != self.backdrop_shape
+        });
         if stale {
-            let image =
-                egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], rgba);
+            let view = GameView {
+                rgba,
+                width,
+                height,
+                pixel_aspect: 1.0,
+                smooth: false,
+                logical,
+                serial: None,
+            };
+            let mut buffer = Vec::new();
+            let view = filter::shape(view, self.backdrop_shape, &mut buffer);
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [view.width as usize, view.height as usize],
+                view.rgba,
+            );
             let texture = ctx.load_texture("field backdrop", image, egui::TextureOptions::NEAREST);
-            self.backdrop = Some((field.generation, texture));
+            self.backdrop = Some((field.generation, self.backdrop_shape, texture));
         }
-        self.backdrop.as_ref().map(|(_, texture)| texture.id())
+        self.backdrop.as_ref().map(|(_, _, texture)| texture.id())
     }
 
     /// The texture of the preview card with the Z corners given and its size in pixels, drawn from the pack's
@@ -1353,6 +1383,139 @@ mod tests {
         // The next picture with its art takes its place
         art.note_field_shared(&wide_picture(4, false));
         assert_eq!(backdrop_colour(&art), Some(4));
+    }
+
+    fn patterned_field(scale: u32) -> SharedHd {
+        let (width, height) = (372 * scale, 224 * scale);
+        let rgba = (0..width * height)
+            .flat_map(|at| {
+                [(at % width % 251) as u8, (at / width % 251) as u8, (at % width / 251) as u8, 255]
+            })
+            .collect();
+        SharedHd::new(WideHd {
+            picture: ssd_hd::HdFrame {
+                rgba,
+                width,
+                height,
+                scale,
+                logical: ssd_hd::Rect { x: 58 * scale, y: 0, width: 256 * scale, height },
+            },
+            scene: ssd_hd::world::Scene::Field,
+            logical: ssd_hd::world::Rect { x: 58, y: 0, width: 256, height: 224 },
+            hud: ssd_hd::world::Rect { x: 58, y: 0, width: 256, height: 224 },
+            stats: ssd_hd::world::WideStats::default(),
+            art_pending: false,
+        })
+    }
+
+    fn painted_backdrop(
+        ctx: &egui::Context,
+        art: &mut Art,
+        picture: egui::Rect,
+    ) -> (egui::TextureId, Option<std::sync::Arc<egui::ColorImage>>) {
+        let mut list = DrawList::new();
+        list.push(Op::Backdrop);
+        let raw = egui::RawInput { screen_rect: Some(picture), ..Default::default() };
+        let output = ctx.run_ui(raw, |ui| paint(ui, picture, &list, art));
+        let id = art.backdrop.as_ref().expect("the backdrop was uploaded").2.id();
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == id => Some(mesh),
+                _ => None,
+            })
+            .expect("the backdrop was painted");
+        assert_eq!(mesh.calc_bounds(), picture);
+        for uv in
+            [egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0), egui::pos2(1.0, 1.0)]
+        {
+            assert!(mesh.vertices.iter().any(|vertex| vertex.uv == uv));
+        }
+        let image =
+            output.textures_delta.set.get(&id).and_then(|deltas| deltas.last()).map(|delta| {
+                let egui::epaint::image::ImageData::Color(image) = &delta.image;
+                image.clone()
+            });
+        output.drop_without_applying_deltas();
+        (id, image)
+    }
+
+    #[test]
+    fn the_menu_backdrop_matches_the_live_crop_and_filters_even_when_only_options_change() {
+        let ctx = egui::Context::default();
+        let (machine, _store) = crate::test_support::sram_counter_machine();
+        let frame = machine.frame();
+        let shapes = [
+            Shape::default(),
+            Shape { crop: true, filters: filter::Filters::default() },
+            Shape { crop: true, filters: filter::Filters { scanlines: 2, crt: 1 } },
+            Shape { crop: true, filters: filter::Filters { scanlines: 1, crt: 2 } },
+            Shape::default(),
+        ];
+        let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+        for scale in [1, 2] {
+            let shared = patterned_field(scale);
+            let mut art = Art::empty();
+            art.note_field_shared(&shared);
+            for shape in shapes {
+                art.backdrop_shape = shape;
+                let mut buffer = Vec::new();
+                let live = filter::shape(
+                    GameView::enhanced(&shared.picture.picture, &frame, false),
+                    shape,
+                    &mut buffer,
+                );
+                let picture = crate::layout::picture_rect(
+                    1.0,
+                    area,
+                    live.width,
+                    live.height,
+                    live.pixel_aspect,
+                    false,
+                );
+                let (id, image) = painted_backdrop(&ctx, &mut art, picture);
+                let image = image.expect("a new video shape refreshes the frozen field");
+                let width = if shape.crop { 256 } else { 372 } * scale;
+                assert_eq!(image.size, [width as usize, (224 * scale) as usize]);
+                let expected = egui::ColorImage::from_rgba_unmultiplied(
+                    [live.width as usize, live.height as usize],
+                    live.rgba,
+                );
+                assert_eq!(image.pixels, expected.pixels, "{shape:?} at {scale}x");
+                assert_eq!(art.field.as_ref().unwrap().generation, shared.serial);
+                for size in [egui::vec2(2100.0, 900.0), egui::vec2(900.0, 2100.0)] {
+                    let stretched = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                    let (cached, uploaded) = painted_backdrop(&ctx, &mut art, stretched);
+                    assert_eq!(cached, id, "the destination does not change the source crop");
+                    assert!(uploaded.is_none(), "unchanged field and video shape stay cached");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_field_refreshes_the_backdrop_and_a_classic_frame_is_not_cropped() {
+        let ctx = egui::Context::default();
+        let mut art = Art::empty();
+        art.backdrop_shape.crop = true;
+        let picture = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut previous = None;
+        for colour in [20, 80] {
+            art.keep_field(
+                ssd_hd::world::next_serial(),
+                FieldSource::Pixels { width: 8, height: 6, rgba: vec![colour; 8 * 6 * 4] },
+            );
+            let (id, image) = painted_backdrop(&ctx, &mut art, picture);
+            let image = image.expect("a new field refreshes the texture");
+            assert_eq!(image.size, [8, 6], "a Classic frame has no extra map to crop");
+            assert_eq!(
+                image.pixels[0],
+                egui::Color32::from_rgba_unmultiplied(colour, colour, colour, colour)
+            );
+            assert_ne!(previous, Some(id));
+            previous = Some(id);
+        }
     }
 
     #[test]

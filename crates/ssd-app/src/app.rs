@@ -2745,7 +2745,8 @@ fn windowed_loop(
             env.verify.as_ref(),
             state.video.linear(),
         );
-        let views = shape_views(views, state.video.shape(), &mut shape_buffer);
+        let shape = state.video.shape();
+        let views = shape_views(views, shape, &mut shape_buffer);
         // The HD menu on screen, from this frame's state: nothing on the field, nothing in Classic.
         let scene = state.hd.as_ref().and_then(|hd| hd.scene(machine.wram()));
         let overlay = state.hd.as_ref().and_then(|hd| hd.overlay(machine.wram(), machine.sram()));
@@ -2755,7 +2756,7 @@ fn windowed_loop(
         let panel = &mut state.panel;
         let asking = &mut state.quit_confirm;
         let mut answer = None;
-        let mut hd_art = state.hd.as_mut().map(Hd::art);
+        let mut hd_art = state.hd.as_mut().map(|hd| hd.art(shape));
         if hd_art.is_none() && asking.is_some() {
             hd_art = Some(&mut plain_art);
         }
@@ -3053,14 +3054,15 @@ fn draw_snapshot(
         Some(picture) => GameView::enhanced(picture, &machine.frame(), state.video.linear()),
         None => GameView::classic(&wide),
     };
-    let views = [filter::shape(views, state.video.shape(), &mut shape_buffer)];
+    let shape = state.video.shape();
+    let views = [filter::shape(views, shape, &mut shape_buffer)];
     let mut actions = Vec::new();
     let scene = state.hd.as_ref().and_then(|hd| hd.scene(machine.wram()));
     let overlay = state.hd.as_ref().and_then(|hd| hd.overlay(machine.wram(), machine.sram()));
     let (scene, overlay) = with_quit_confirm(&state, scene, overlay);
     let mut plain_art = hd::Art::empty();
     let asking = state.quit_confirm.is_some();
-    let mut hd_art = state.hd.as_mut().map(Hd::art);
+    let mut hd_art = state.hd.as_mut().map(|hd| hd.art(shape));
     if hd_art.is_none() && asking {
         hd_art = Some(&mut plain_art);
     }

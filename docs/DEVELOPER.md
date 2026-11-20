@@ -401,7 +401,10 @@ video changes?": Keep writes it to `ssd.settings`, Revert (B) puts the old choic
 reverts (the cursor starts on Revert). A `--hd-scale` or `--enhanced-look` flag wins for its run until that very row is
 changed on the page; headless runs, snapshots and replays ignore the saved file. Scanlines, the CRT filter and the 4:3 crop
 are a last pass of the app over the picture (`crates/ssd-app/src/filter.rs`), not part of `ssd-hd`: with them off the picture
-is the renderer's own, byte for byte.
+is the renderer's own, byte for byte. The frozen backdrop behind the HD menus uses the same pass, including the original
+window's crop in 4:3, rather than squeezing the whole widescreen field into the narrower picture. Its texture is refreshed
+when the field or video choices change, so previewing and reverting Aspect while a menu is open stays consistent with live
+play. Window screenshots and UI snapshots use the same backdrop.
 
 The Accessibility page (this PC, keys `access.text_size`, `access.contrast`, `access.cursor`) changes how all the HD menus look (Menu, Items, Cheats,
 Options and the notices), never the game's own picture or Classic: Text size (Large makes every text a quarter bigger where there

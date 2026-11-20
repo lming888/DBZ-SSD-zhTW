@@ -2798,6 +2798,7 @@ fn windowed_loop(
                 hd_art,
                 machine,
                 state.ppu_stale,
+                state.touch.stretches_picture(),
             );
             match &result {
                 Ok((png, state)) => log::info!(
@@ -2852,6 +2853,7 @@ fn windowed_loop(
 /// the game views and the HD layer, drawn as the window draws them, at the window's size in pixels), or the PPU's own
 /// frame (`Frame`). Writes the machine's state beside it, named the same, so the picture can be played back with
 /// `xtask shots --state-in`. Returns the two paths.
+#[allow(clippy::too_many_arguments)]
 fn take_screenshot(
     kind: screenshot::Kind,
     video: &mut video::Video,
@@ -2860,11 +2862,12 @@ fn take_screenshot(
     mut art: Option<&mut hd::Art>,
     machine: &Machine,
     ppu_stale: bool,
+    stretch: bool,
 ) -> std::io::Result<(PathBuf, PathBuf)> {
     let (width, height, rgba) = match kind {
         screenshot::Kind::Window => video
             .capture(views, |ui, games| {
-                ui::draw_game(ui, games, frame_layer(scene, overlay, art.as_deref_mut()));
+                ui::draw_game(ui, games, frame_layer(scene, overlay, art.as_deref_mut()), stretch);
             })
             .map_err(std::io::Error::other)?,
         screenshot::Kind::Frame => original_frame(machine, ppu_stale),

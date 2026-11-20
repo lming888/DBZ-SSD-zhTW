@@ -468,6 +468,7 @@ Show FPS: {}	顯示 FPS：{}
 Picture: {}	畫面：{}
 Standard	標準
 Full screen	全螢幕
+Stretch	拉伸
 Saved on this device only, in ssd.settings. Auto battle switches to the minimal layout in fights.	只存在這台裝置的 ssd.settings。「戰鬥自動切換」開啟時，戰鬥中會換成精簡版面。
 EDIT LAYOUT	編輯版面
 Reset to default	恢復預設

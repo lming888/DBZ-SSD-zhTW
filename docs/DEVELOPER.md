@@ -598,9 +598,13 @@ controls' alone.
   rows are parts of that band, so on a short screen (a split screen, a window, a Fold's halves) no group covers another or
   the picture; a test checks every group at nine screen sizes, both ways.
 - Picture (Touch options): Standard (the design), Large (the controls at 85% and packed toward the edges; in portrait the
-  picture takes the whole width where the band still fits) or Full screen (the picture as big as the screen holds, the
-  controls floating over it at their opacity). With the touch controls an Enhanced picture fills its area at any scale
-  (`layout::fit_any`); the Classic frame and the desktop keep whole scales.
+  picture takes the whole width where the band still fits), Full screen (the picture as big as the screen holds, the
+  controls floating over it at their opacity), or Stretch. Stretch fills the entire panel in landscape and portrait,
+  including 16:9 and 21:9 phones, without cropping or preserving the picture's aspect ratio: characters and scenery
+  become wider or taller. It uses the same compact controls as Full screen and stays active when a gamepad hides them.
+  The HD menu backdrop and window screenshots follow the stretched picture; menu text and touch buttons keep their
+  proportions. Standard remains the default. In the other modes an Enhanced picture fills its area at any scale
+  (`layout::fit_any`) with the touch controls; the Classic frame and the desktop keep whole scales.
 - MENU pauses: Save state and Load state (the current slot; State slot picks it, 1 to 4), Options (the touch options), Edit layout, Hide controls (a chip
   at the top right brings them back), Resume, and a GAME page with Restart game and Quit, each on a second tap (the play
   since the last save is lost; on Android the launch loop starts the game again, `android_setup::Forced::Relaunch`). The
@@ -614,7 +618,7 @@ controls' alone.
 - Edit layout: tap a group to select it, drag it, drag a corner handle or use +/- for the size (100 to 180%, so never under
   48 dp), opacity, Reset to default, Done. The layout is kept per device in `saves/ssd.settings` under `controls.touch.*`
   (`style`, `opacity` as a step of five percent, `haptics`, `auto_battle`, `hide_pad`, `picture` (0 Standard, 1 Large, 2 Full
-  screen), `show_fps`, and `<group>.x|y|s` or
+  screen, 3 Stretch), `show_fps`, and `<group>.x|y|s` or
   `p.<group>.x|y|s` for the portrait layout: the centre in per mille of the screen and the size in percent).
 - Options > Controls > Turbo (the Device row's fourth page, for every device): Turbo Off, A or A+B and the presses per second
   (15, 20 or 30; `controls.turbo.mode` and `controls.turbo.rate` in `saves/ssd.settings`). While a turbo button is held the game

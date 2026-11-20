@@ -389,7 +389,7 @@ pub const TOUCH_HIDE_PAD: &str = "controls.touch.hide_pad";
 /// The frame rate and the sound buffer at the top of the screen: 0 off (the default), 1 on.
 pub const TOUCH_SHOW_FPS: &str = "controls.touch.show_fps";
 /// The size of the picture beside the controls: 0 the design's (the default), 1 large, 2 the whole screen with the
-/// controls over it.
+/// controls over it, 3 stretched to the whole screen without keeping the aspect.
 pub const TOUCH_PICTURE: &str = "controls.touch.picture";
 /// Which buttons turbo holds down: 0 none (the default), 1 A, 2 A and B.
 pub const TURBO_MODE: &str = "controls.turbo.mode";

@@ -132,14 +132,15 @@ pub fn draw(
     // The touch controls (M9) shrink the picture's area to what the controls leave, and paint over everything.
     let touch = view.touch.filter(|t| t.enabled && !panel.open);
     let area = touch.and_then(crate::touch::Touch::picture_area);
+    let stretch = touch.is_some_and(crate::touch::Touch::stretches_picture);
     if panel.open {
         header(ui, view, actions);
         side_panel(ui, view, panel, actions);
         let now = ui.ctx().input(|i| i.time);
         controls_bar(ui, view.controls, panel.notice(now), actions);
-        game_area(ui, games, view.verify_labels.as_ref(), GROUND, hd, None);
+        game_area(ui, games, view.verify_labels.as_ref(), GROUND, hd, None, false);
     } else {
-        game_area(ui, games, view.verify_labels.as_ref(), Color32::BLACK, hd, area);
+        game_area(ui, games, view.verify_labels.as_ref(), Color32::BLACK, hd, area, stretch);
         if view.controls.debug && !on_screen && touch.is_none() {
             pill(ui.ctx(), view.status, actions);
         }
@@ -157,15 +158,15 @@ pub fn draw(
 
 /// The game alone, as the window shows it with the panel closed and nothing over it: the picture of a
 /// screenshot. An HD menu on screen takes the area as in [`draw`].
-pub fn draw_game(ui: &mut Ui, games: &[GameImage], hd: Hd<'_>) {
-    game_area(ui, games, None, Color32::BLACK, hd, None);
+pub fn draw_game(ui: &mut Ui, games: &[GameImage], hd: Hd<'_>, stretch: bool) {
+    game_area(ui, games, None, Color32::BLACK, hd, None, stretch);
 }
 
 // --- the game ---------------------------------------------------------------------------------
 
 /// The game views in what the panels leave: one frame, as large as a whole scale allows and
-/// centred; or two side by side, each captioned with its label. An HD menu on screen replaces the
-/// frame: it is painted over the frame's own picture (the rect the live frame is drawn in), so the
+/// centred, or stretched to fill the area; or two side by side, each captioned with its label. An HD menu on screen
+/// replaces the frame: it is painted over the frame's own picture (the rect the live frame is drawn in), so the
 /// menu's backdrop does not move the picture.
 fn game_area(
     ui: &mut Ui,
@@ -174,13 +175,14 @@ fn game_area(
     ground: Color32,
     hd: Hd<'_>,
     inset: Option<Rect>,
+    stretch: bool,
 ) {
     let full = ui.available_rect_before_wrap();
     ui.painter().rect_filled(full, 0.0, ground);
     let rect = inset.unwrap_or(full);
     let overlay = match hd {
         Some(Layer { list, art, menu: true }) => {
-            let picture = games.first().map_or(rect, |game| picture_of(ui, rect, game));
+            let picture = games.first().map_or(rect, |game| picture_of(ui, rect, game, stretch));
             note_hd_picture(ui, picture);
             hd::paint(ui, picture, list, art);
             ui.allocate_rect(rect, Sense::hover());
@@ -189,7 +191,7 @@ fn game_area(
         other => other,
     };
     match games {
-        [game] => fitted(ui, rect, game),
+        [game] => fitted(ui, rect, game, stretch),
         [a, b] => {
             let gap = 16.0;
             let half = (rect.width() - gap) / 2.0;
@@ -197,8 +199,8 @@ fn game_area(
             let left = Rect::from_min_size(rect.min, vec2(half, rect.height() - caption));
             let right_min = pos2(rect.min.x + half + gap, rect.min.y);
             let right = Rect::from_min_size(right_min, vec2(half, rect.height() - caption));
-            fitted(ui, left, a);
-            fitted(ui, right, b);
+            fitted(ui, left, a, stretch);
+            fitted(ui, right, b, stretch);
             if let Some([label_a, label_b]) = labels {
                 let y = rect.max.y - caption / 2.0;
                 let font = FontId::proportional(11.0);
@@ -214,7 +216,7 @@ fn game_area(
     if let Some(Layer { list, art, .. }) = overlay
         && let Some(game) = games.first()
     {
-        let picture = picture_of(ui, rect, game);
+        let picture = picture_of(ui, rect, game, stretch);
         note_hd_picture(ui, picture);
         hd::paint(ui, picture, list, art);
     }
@@ -253,9 +255,9 @@ pub fn quit_confirm_pointer(
     click.and_then(|at| question.click(logical(at)))
 }
 
-/// One game view fitted in `area`: whole scale in physical pixels, letterboxed.
-fn fitted(ui: &Ui, area: Rect, game: &GameImage) {
-    let image = picture_of(ui, area, game);
+/// One game view fitted in `area`: letterboxed, or stretched to fill it.
+fn fitted(ui: &Ui, area: Rect, game: &GameImage, stretch: bool) {
+    let image = picture_of(ui, area, game, stretch);
     ui.painter().image(
         game.id,
         image,
@@ -266,18 +268,22 @@ fn fitted(ui: &Ui, area: Rect, game: &GameImage) {
 
 /// The rect a game view is drawn in, within `area`: the one [`fitted`] paints, and the one an HD
 /// menu's backdrop and layout are fitted to.
-fn picture_of(ui: &Ui, area: Rect, game: &GameImage) -> Rect {
-    // With the touch controls (a phone) an HD picture fills its area at any scale: its whole multiples do not
-    // fit there. The machine's own frame, and the desktop, keep whole scales.
-    let whole = !(crate::touch::wanted() && game.height > layout::MACHINE_LINES);
-    let picture = layout::picture_rect(
-        ui.ctx().pixels_per_point(),
-        area,
-        game.width,
-        game.height,
-        game.pixel_aspect,
-        whole,
-    );
+fn picture_of(ui: &Ui, area: Rect, game: &GameImage, stretch: bool) -> Rect {
+    let picture = if stretch {
+        area
+    } else {
+        // With the touch controls (a phone) an HD picture fills its area at any scale: its whole multiples do not
+        // fit there. The machine's own frame, and the desktop, keep whole scales.
+        let whole = !(crate::touch::wanted() && game.height > layout::MACHINE_LINES);
+        layout::picture_rect(
+            ui.ctx().pixels_per_point(),
+            area,
+            game.width,
+            game.height,
+            game.pixel_aspect,
+            whole,
+        )
+    };
     log::debug!("game picture {picture:?} in area {area:?}");
     picture
 }
@@ -860,6 +866,117 @@ mod tests {
         let ctx = egui::Context::default();
         theme::install(&ctx);
         ctx
+    }
+
+    fn image_mesh(
+        shapes: &[egui::epaint::ClippedShape],
+        id: egui::TextureId,
+    ) -> &egui::epaint::Mesh {
+        shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == id => Some(mesh.as_ref()),
+                _ => None,
+            })
+            .expect("the game image was drawn")
+    }
+
+    #[test]
+    fn stretch_fills_phone_panels_without_cropping_with_or_without_a_gamepad() {
+        use crate::touch::settings::{Picture, Settings};
+
+        let ctx = ctx();
+        let controls = Controls::new(HooksArg::Original, HooksSwitch::Allowed, true, true);
+        let (machine, _store) = sram_counter_machine();
+        let history = FrameHistory::default();
+        let registers = machine.cpu_registers();
+        let pictures = [Picture::Standard, Picture::Large, Picture::Full, Picture::Stretch];
+        for size in
+            [vec2(1600.0, 900.0), vec2(2100.0, 900.0), vec2(900.0, 1600.0), vec2(900.0, 2100.0)]
+        {
+            let screen = Rect::from_min_size(pos2(0.0, 0.0), size);
+            for (width, height, pixel_aspect) in [(256, 224, 8.0 / 7.0), (1488, 896, 1.0)] {
+                let games =
+                    [GameImage { id: egui::TextureId::User(42), width, height, pixel_aspect }];
+                for picture in pictures {
+                    for gamepad in [false, true] {
+                        let settings = Settings { picture, ..Settings::default() };
+                        let mut touch = crate::touch::Touch::new(true, settings, screen);
+                        touch.set_status("x1", 1, gamepad, false);
+                        let view = View {
+                            status: Status::default(),
+                            controls: &controls,
+                            registers: &registers,
+                            recording: false,
+                            verify_labels: None,
+                            machine: &machine,
+                            symbols: None,
+                            history: &history,
+                            touch: Some(&touch),
+                        };
+                        let raw = egui::RawInput {
+                            screen_rect: Some(screen),
+                            time: Some(1.0),
+                            ..egui::RawInput::default()
+                        };
+                        let mut panel = PanelState::default();
+                        let mut actions = Vec::new();
+                        let output = ctx.run_ui(raw, |ui| {
+                            draw(ui, &view, &games, &mut panel, &mut actions, None);
+                        });
+                        let mesh = image_mesh(&output.shapes, games[0].id);
+                        let expected = if picture == Picture::Stretch {
+                            screen
+                        } else {
+                            let whole = !(crate::touch::wanted() && height > layout::MACHINE_LINES);
+                            layout::picture_rect(
+                                ctx.pixels_per_point(),
+                                touch.picture_area().unwrap_or(screen),
+                                width,
+                                height,
+                                pixel_aspect,
+                                whole,
+                            )
+                        };
+                        assert_eq!(mesh.calc_bounds(), expected, "{size:?} {picture:?}");
+                        assert_eq!(mesh.vertices.len(), 4);
+                        for uv in [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(0.0, 1.0), pos2(1.0, 1.0)] {
+                            assert!(mesh.vertices.iter().any(|vertex| vertex.uv == uv));
+                        }
+                        output.drop_without_applying_deltas();
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stretched_screenshots_and_hd_layers_use_the_same_full_panel_rectangle() {
+        let ctx = ctx();
+        let games = [GameImage {
+            id: egui::TextureId::User(42),
+            width: 256,
+            height: 224,
+            pixel_aspect: 8.0 / 7.0,
+        }];
+        for size in [vec2(2100.0, 900.0), vec2(900.0, 2100.0)] {
+            let screen = Rect::from_min_size(pos2(0.0, 0.0), size);
+            let raw = egui::RawInput { screen_rect: Some(screen), ..egui::RawInput::default() };
+            let output = ctx.run_ui(raw.clone(), |ui| draw_game(ui, &games, None, true));
+            assert_eq!(image_mesh(&output.shapes, games[0].id).calc_bounds(), screen);
+            output.drop_without_applying_deltas();
+            let list = DrawList::new();
+            let mut art = hd::Art::empty();
+            for menu in [false, true] {
+                let output = ctx.run_ui(raw.clone(), |ui| {
+                    let layer = Layer { list: &list, art: &mut art, menu };
+                    draw_game(ui, &games, Some(layer), true);
+                });
+                let picture: Option<Rect> = ctx.data(|data| data.get_temp(Id::new(HD_PICTURE)));
+                assert_eq!(picture, Some(screen));
+                output.drop_without_applying_deltas();
+            }
+        }
     }
 
     #[test]

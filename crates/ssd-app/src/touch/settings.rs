@@ -90,10 +90,12 @@ pub enum Picture {
     Large,
     /// The whole screen, the controls over the picture.
     Full,
+    /// The whole screen without keeping the picture's aspect, the controls over it.
+    Stretch,
 }
 
 impl Picture {
-    const ALL: [Picture; 3] = [Picture::Standard, Picture::Large, Picture::Full];
+    const ALL: [Picture; 4] = [Picture::Standard, Picture::Large, Picture::Full, Picture::Stretch];
 
     /// The next size (the options' button goes round them).
     #[must_use]
@@ -108,6 +110,7 @@ impl Picture {
             Self::Standard => "Standard",
             Self::Large => "Large",
             Self::Full => "Full screen",
+            Self::Stretch => "Stretch",
         }
     }
 }
@@ -285,6 +288,25 @@ mod tests {
         let wild = Settings::from_values(&v);
         assert_eq!(wild.opacity, OPACITY_MIN);
         assert_eq!(wild.place(Orient::Landscape, Group::Face).scale, Some(SCALE_MAX));
+    }
+
+    #[test]
+    fn stretch_is_appended_without_changing_the_saved_picture_modes() {
+        let pictures = [Picture::Standard, Picture::Large, Picture::Full, Picture::Stretch];
+        for (index, picture) in pictures.into_iter().enumerate() {
+            let mut values = Values::new();
+            values.set(keys::TOUCH_PICTURE, index as i64);
+            let settings = Settings::from_values(&values);
+            assert_eq!(settings.picture, picture);
+            settings.store(&mut values);
+            assert_eq!(values.get(keys::TOUCH_PICTURE).unwrap_or(0), index as i64);
+            assert_eq!(picture.next(), pictures[(index + 1) % pictures.len()]);
+        }
+        let mut values = Values::new();
+        values.set(keys::TOUCH_PICTURE, -1);
+        assert_eq!(Settings::from_values(&values).picture, Picture::Standard);
+        values.set(keys::TOUCH_PICTURE, i64::MAX);
+        assert_eq!(Settings::from_values(&values).picture, Picture::Stretch);
     }
 
     #[test]

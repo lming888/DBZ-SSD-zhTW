@@ -271,6 +271,7 @@ pub struct WideRenderer {
     /// transformation started while it goes on (the conditions', [`Conditions::with_ssj_lightning`]).
     lightning: Option<crate::lightning::Overlay>,
     ssj_lightning: Option<u32>,
+    hide_field_ui: bool,
 }
 
 /// A part of an object the original drops, as a wide frame draws it.
@@ -401,6 +402,7 @@ impl WideRenderer {
             cost: crate::DrawCost::default(),
             lightning: None,
             ssj_lightning: None,
+            hide_field_ui: false,
         }
     }
 
@@ -565,6 +567,13 @@ impl WideRenderer {
         options: WideOptions,
         hd: HdOptions,
     ) -> Result<WideHd, WideError> {
+        let quiet_field;
+        let log = if self.hide_field_ui {
+            quiet_field = without_field_ui(log);
+            &quiet_field
+        } else {
+            log
+        };
         let started = std::time::Instant::now();
         self.compose_time = std::time::Duration::ZERO;
         assert!((1..=crate::MAX_SCALE).contains(&hd.scale), "the scale is 1 to 8");
@@ -1547,6 +1556,7 @@ enum Settled {
 /// work RAM it started from (the end of the frame before it), so the field's variables are the
 /// ones its NMI used. Feed it every frame of the run in order: the sprite line buffers carry over.
 pub struct WideRun {
+    hide_field_ui: bool,
     rom: Arc<[u8]>,
     /// The renderer; `None` while a picture is being drawn in the background (`drawing`).
     renderer: Option<WideRenderer>,
@@ -1606,6 +1616,21 @@ impl Inputs {
 struct Drawn {
     inputs: Inputs,
     shared: SharedHd,
+}
+
+fn without_field_ui(log: &FrameLog) -> FrameLog {
+    let mut quiet = log.clone();
+    for entry in &mut quiet.entries {
+        let regs = &mut entry.regs;
+        // The field's faces and windows only. BG2, OBJ, scroll and Mode 7 are untouched.
+        if regs.bg_mode == 1 && regs.bg_map_base[0] == 0x6800 && regs.bg_map_base[2] == 0x2C00 {
+            for bg in [0, 2] {
+                regs.main_bg[bg] = false;
+                regs.sub_bg[bg] = false;
+            }
+        }
+    }
+    quiet
 }
 
 /// Whether two render logs hold the same frame (`FrameLog` has no `PartialEq`). The pattern names every field, so a
@@ -1675,6 +1700,7 @@ impl WideRun {
     #[must_use]
     pub fn new(rom: &[u8]) -> Self {
         Self {
+            hide_field_ui: false,
             rom: Arc::from(rom),
             renderer: Some(WideRenderer::new()),
             worker: None,
@@ -1992,6 +2018,16 @@ impl WideRun {
     pub fn set_font(&mut self, font: Option<Arc<Font>>) {
         self.shared = None;
         self.renderer().set_font(font);
+    }
+
+    /// Suppresses the native field corner portraits and command window during Fly/Land transitions
+    /// in the 4:3 view, and invalidates the shared-picture cache when the flag changes.
+    pub fn set_hide_field_ui(&mut self, hide_field_ui: bool) {
+        if self.hide_field_ui != hide_field_ui {
+            self.hide_field_ui = hide_field_ui;
+            self.shared = None;
+            self.renderer().hide_field_ui = hide_field_ui;
+        }
     }
 
     /// Measures the colours the art draws against the original's ([`crate::ArtStats::drawn`]).
@@ -3650,6 +3686,49 @@ mod tests {
             picture(&mut run, None) == plain,
             "the transformation over (or a state loaded): none at once"
         );
+    }
+
+    #[test]
+    fn hide_field_ui_hides_only_field_faces_and_windows_and_invalidates_cached_pictures() {
+        let mut log = plane(224);
+        for entry in &mut log.entries {
+            entry.regs.bg_mode = 1;
+            entry.regs.main_bg = [true, true, true, false];
+            entry.regs.sub_bg = [true, false, true, false];
+            entry.regs.bg_map_base[0] = 0x6800;
+            entry.regs.bg_map_base[2] = 0x2C00;
+        }
+        let quiet = without_field_ui(&log);
+        for (original, hidden) in log.entries.iter().zip(&quiet.entries) {
+            assert_eq!(hidden.regs.main_bg, [false, true, false, false]);
+            assert_eq!(hidden.regs.sub_bg, [false; 4]);
+            let mut restored = hidden.clone();
+            restored.regs.main_bg = original.regs.main_bg;
+            restored.regs.sub_bg = original.regs.sub_bg;
+            assert_eq!(
+                &restored, original,
+                "objects, scroll and animation registers are unchanged"
+            );
+        }
+        let mode7 = plane(224);
+        assert!(same_log(&mode7, &without_field_ui(&mode7)), "never remove a Mode 7 plane");
+        let mut run = WideRun::new(&rom());
+        let wram = vec![0; 0x20000];
+        let hd = HdOptions { scale: 2, look: crate::Look::Pixel };
+        let original = run.note_hd_shared(&wram, Some(&mode7), hd).unwrap();
+        let kept = run.note_hd_shared(&wram, Some(&mode7), hd).unwrap();
+        assert_eq!(original.serial, kept.serial);
+        run.set_hide_field_ui(true);
+        let changed = run.note_hd_shared(&wram, Some(&mode7), hd).unwrap();
+        assert_ne!(original.serial, changed.serial, "never reuse a different presentation");
+        assert_eq!(
+            original.picture.picture.rgba, changed.picture.picture.rgba,
+            "an unrelated scene remains pixel-identical"
+        );
+        run.set_hide_field_ui(false);
+        let restored = run.note_hd_shared(&wram, Some(&mode7), hd).unwrap();
+        assert_ne!(changed.serial, restored.serial);
+        assert_eq!(original.picture.picture.rgba, restored.picture.picture.rgba);
     }
 
     #[test]

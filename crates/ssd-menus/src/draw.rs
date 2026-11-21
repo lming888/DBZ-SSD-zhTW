@@ -136,6 +136,7 @@ pub enum Op {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DrawList {
     ops: Vec<Op>,
+    canvas_size: Option<(f32, f32)>,
     /// The texts the screens drew as several runs, or as one run made of parts: [`DrawList::map_text`] asks for the
     /// whole first.
     wholes: Vec<Whole>,
@@ -189,6 +190,22 @@ impl DrawList {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty list in a logical canvas other than the default widescreen design.
+    #[must_use]
+    pub fn sized(width: f32, height: f32) -> Self {
+        let size = (width, height);
+        Self {
+            canvas_size: (size != (crate::layout::WIDTH, crate::layout::HEIGHT)).then_some(size),
+            ..Self::default()
+        }
+    }
+
+    /// The logical canvas the backend fits to the picture.
+    #[must_use]
+    pub fn canvas_size(&self) -> (f32, f32) {
+        self.canvas_size.unwrap_or((crate::layout::WIDTH, crate::layout::HEIGHT))
     }
 
     /// The steps, in paint order.

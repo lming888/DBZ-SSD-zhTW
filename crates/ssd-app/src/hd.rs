@@ -6,6 +6,8 @@
 //! cached ROM the first time they are drawn and kept as egui textures for the run. The field as it
 //! was when the menu opened is kept too: it is the backdrop the HD paints behind its windows.
 
+use crate::canvas::GameView;
+use crate::filter::{self, Shape};
 use crate::paths;
 use crate::theme;
 use anyhow::Context;
@@ -214,6 +216,7 @@ impl Hd {
                 hand_textures: HashMap::new(),
                 textures: HashMap::new(),
                 field: None,
+                backdrop_shape: Shape::default(),
                 backdrop: None,
             },
             wide: {
@@ -575,6 +578,11 @@ impl Hd {
         self.wide.note(wram, log)
     }
 
+    /// Presentation belongs to the renderer, not to the emulated game's menu state.
+    pub fn prepare_view(&mut self, wram: &[u8], narrow: bool) {
+        self.wide.set_hide_field_ui(narrow && self.driver.travel_transition(wram));
+    }
+
     /// The 16:9 view of the frame that just ran as the Enhanced picture (see [`WideRun::note_hd_shared`]): a frame whose inputs
     /// are those of the picture before is not drawn again.
     pub fn note_frame_hd_shared(
@@ -684,9 +692,10 @@ impl Hd {
         }
     }
 
-    /// The textures of the pictures and of the backdrop, for painting.
+    /// The textures for painting, with the same last pass on the backdrop as on the live picture.
     #[must_use]
-    pub fn art(&mut self) -> &mut Art {
+    pub fn art(&mut self, shape: Shape) -> &mut Art {
+        self.art.backdrop_shape = shape;
         &mut self.art
     }
 }
@@ -719,8 +728,9 @@ pub struct Art {
     hand_textures: HashMap<(Vec<u16>, CardPart), Option<egui::TextureHandle>>,
     textures: HashMap<Picture, Option<egui::TextureHandle>>,
     field: Option<FieldImage>,
-    /// The texture of the field at a generation, uploaded when it is first painted.
-    backdrop: Option<(u64, egui::TextureHandle)>,
+    backdrop_shape: Shape,
+    /// The texture of the field at a generation and video shape, uploaded when it is first painted.
+    backdrop: Option<(u64, Shape, egui::TextureHandle)>,
 }
 
 impl Art {
@@ -736,6 +746,7 @@ impl Art {
             hand_textures: HashMap::new(),
             textures: HashMap::new(),
             field: None,
+            backdrop_shape: Shape::default(),
             backdrop: None,
         }
     }
@@ -769,29 +780,64 @@ impl Art {
         self.field = Some(FieldImage { generation, source });
     }
 
-    /// The texture of the backdrop, uploaded if the field changed since it was last painted; `None`
-    /// before any field was copied. It is painted over the game picture, in the same rect.
+    fn menu_canvas(&self, picture: egui::Rect, stretch: bool) -> egui::Rect {
+        if stretch && self.backdrop_shape.crop {
+            egui::Rect::from_min_size(
+                picture.min,
+                egui::vec2(picture.width(), picture.width() * 3.0 / 4.0),
+            )
+        } else {
+            picture
+        }
+    }
+
+    /// The texture of the backdrop, uploaded if the field or video shape changed; `None` before any field was
+    /// copied. The 4:3 crop and filters match the live picture before it is painted in the same rect.
     fn backdrop(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
         let field = self.field.as_ref()?;
-        let (width, height, rgba) = match &field.source {
-            FieldSource::Pixels { width, height, rgba } => (*width, *height, rgba.as_slice()),
+        let (width, height, rgba, logical) = match &field.source {
+            FieldSource::Pixels { width, height, rgba } => (*width, *height, rgba.as_slice(), None),
             FieldSource::Picture(shared) => {
                 let picture = &shared.picture.picture;
-                (picture.width, picture.height, picture.rgba.as_slice())
+                (
+                    picture.width,
+                    picture.height,
+                    picture.rgba.as_slice(),
+                    Some([
+                        picture.logical.x,
+                        picture.logical.y,
+                        picture.logical.width,
+                        picture.logical.height,
+                    ]),
+                )
             }
         };
         if width == 0 || height == 0 {
             return None;
         }
-        let stale =
-            self.backdrop.as_ref().is_none_or(|(generation, _)| *generation != field.generation);
+        let stale = self.backdrop.as_ref().is_none_or(|(generation, shape, _)| {
+            *generation != field.generation || *shape != self.backdrop_shape
+        });
         if stale {
-            let image =
-                egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], rgba);
+            let view = GameView {
+                rgba,
+                width,
+                height,
+                pixel_aspect: 1.0,
+                smooth: false,
+                logical,
+                serial: None,
+            };
+            let mut buffer = Vec::new();
+            let view = filter::shape(view, self.backdrop_shape, &mut buffer);
+            let image = egui::ColorImage::from_rgba_unmultiplied(
+                [view.width as usize, view.height as usize],
+                view.rgba,
+            );
             let texture = ctx.load_texture("field backdrop", image, egui::TextureOptions::NEAREST);
-            self.backdrop = Some((field.generation, texture));
+            self.backdrop = Some((field.generation, self.backdrop_shape, texture));
         }
-        self.backdrop.as_ref().map(|(_, texture)| texture.id())
+        self.backdrop.as_ref().map(|(_, _, texture)| texture.id())
     }
 
     /// The texture of the preview card with the Z corners given and its size in pixels, drawn from the pack's
@@ -1059,6 +1105,13 @@ impl Fit {
         Self::sized(picture, layout::WIDTH, layout::HEIGHT)
     }
 
+    /// The fit of a screen's own logical canvas.
+    #[must_use]
+    pub fn for_list(picture: egui::Rect, list: &DrawList) -> Self {
+        let (width, height) = list.canvas_size();
+        Self::sized(picture, width, height)
+    }
+
     /// The fit of a logical space of `width` x `height` in `picture` (the first-launch screens have their own).
     #[must_use]
     pub fn sized(picture: egui::Rect, width: f32, height: f32) -> Self {
@@ -1087,13 +1140,58 @@ impl Fit {
 /// `art`. The backdrop covers the picture; the logical layout is fitted to it (see [`Fit`]). The
 /// painting is clipped to the picture as well, so nothing can be drawn over the letterbox.
 pub fn paint(ui: &egui::Ui, picture: egui::Rect, list: &DrawList, art: &mut Art) {
-    paint_fit(ui, picture, &Fit::new(picture), list, art);
+    paint_fit(ui, picture, &Fit::for_list(picture, list), list, art);
+}
+
+/// Draws a stretched 4:3 menu in the same display space as the game, including when a 4:3 CRT receives a
+/// widescreen framebuffer. Text must be tessellated before projection so its glyphs follow the portraits.
+/// Returns the canvas whose coordinates the menu's pointer uses.
+pub fn paint_menu(
+    ui: &egui::Ui,
+    picture: egui::Rect,
+    list: &DrawList,
+    art: &mut Art,
+    stretch: bool,
+) -> egui::Rect {
+    let canvas = art.menu_canvas(picture, stretch);
+    if canvas == picture {
+        paint(ui, picture, list, art);
+        return canvas;
+    }
+    let layer = egui::LayerId::new(egui::Order::Background, ui.id().with("hd-menu-projection"));
+    let painter = egui::Painter::new(ui.ctx().clone(), layer, canvas);
+    paint_with(ui, &painter, canvas, &Fit::for_list(canvas, list), list, art);
+    let recorded = ui.ctx().graphics_mut(|graphics| std::mem::take(graphics.entry(layer)));
+    let shapes = recorded.all_entries().cloned().collect();
+    let projection = egui::emath::RectTransform::from_to(canvas, picture);
+    for primitive in ui.ctx().tessellate(shapes, ui.ctx().pixels_per_point()) {
+        let egui::epaint::Primitive::Mesh(mut mesh) = primitive.primitive else {
+            unreachable!("HD draw lists do not contain paint callbacks");
+        };
+        for vertex in &mut mesh.vertices {
+            vertex.pos = projection * vertex.pos;
+        }
+        let clip = projection.transform_rect(primitive.clip_rect).intersect(picture);
+        ui.painter().with_clip_rect(clip).add(mesh);
+    }
+    canvas
 }
 
 /// [`paint`] with the fit of the list's own logical space.
 pub fn paint_fit(ui: &egui::Ui, picture: egui::Rect, fit: &Fit, list: &DrawList, art: &mut Art) {
-    let fit = *fit;
     let painter = ui.painter_at(picture);
+    paint_with(ui, &painter, picture, fit, list, art);
+}
+
+fn paint_with(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    picture: egui::Rect,
+    fit: &Fit,
+    list: &DrawList,
+    art: &mut Art,
+) {
+    let fit = *fit;
     for op in list.ops() {
         match op {
             Op::Backdrop => {
@@ -1113,8 +1211,8 @@ pub fn paint_fit(ui: &egui::Ui, picture: egui::Rect, fit: &Fit, list: &DrawList,
                 let stroke = egui::Stroke::new(width * fit.scale, colour(*color));
                 painter.rect_stroke(fit.rect(*rect), 0.0, stroke, egui::StrokeKind::Inside);
             }
-            Op::Window { rect } => window(&painter, &fit, *rect),
-            Op::WindowHc { rect } => window_contrast(&painter, &fit, *rect),
+            Op::Window { rect } => window(painter, &fit, *rect),
+            Op::WindowHc { rect } => window_contrast(painter, &fit, *rect),
             Op::Pointer { rect, left, fill, edge, ring } => {
                 let (tip, base) =
                     if *left { (rect.x, rect.right()) } else { (rect.right(), rect.x) };
@@ -1165,7 +1263,7 @@ pub fn paint_fit(ui: &egui::Ui, picture: egui::Rect, fit: &Fit, list: &DrawList,
                     stroke,
                 ));
             }
-            Op::Portrait { rect, picture } => portrait(ui, &painter, &fit, art, *rect, *picture),
+            Op::Portrait { rect, picture } => portrait(ui, painter, &fit, art, *rect, *picture),
             Op::Card { rect, attack_z, defence_z } => {
                 match art.card(ui.ctx(), *attack_z, *defence_z) {
                     Some((id, size)) => {
@@ -1177,8 +1275,9 @@ pub fn paint_fit(ui: &egui::Ui, picture: egui::Rect, fit: &Fit, list: &DrawList,
                             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                         painter.image(id, drawn, uv, egui::Color32::WHITE);
                     }
-                    None => paint_fit(
+                    None => paint_with(
                         ui,
+                        painter,
                         picture,
                         &fit,
                         &ssd_menus::screens::pixel_card(*rect, *attack_z, *defence_z),
@@ -1197,8 +1296,9 @@ pub fn paint_fit(ui: &egui::Ui, picture: egui::Rect, fit: &Fit, list: &DrawList,
                     let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                     painter.image(id, fit.rect(*rect), uv, egui::Color32::WHITE);
                 }
-                None => paint_fit(
+                None => paint_with(
                     ui,
+                    painter,
                     picture,
                     &fit,
                     &ssd_menus::screens::cards::flat_part(*rect, *part),
@@ -1355,6 +1455,139 @@ mod tests {
         assert_eq!(backdrop_colour(&art), Some(4));
     }
 
+    fn patterned_field(scale: u32) -> SharedHd {
+        let (width, height) = (372 * scale, 224 * scale);
+        let rgba = (0..width * height)
+            .flat_map(|at| {
+                [(at % width % 251) as u8, (at / width % 251) as u8, (at % width / 251) as u8, 255]
+            })
+            .collect();
+        SharedHd::new(WideHd {
+            picture: ssd_hd::HdFrame {
+                rgba,
+                width,
+                height,
+                scale,
+                logical: ssd_hd::Rect { x: 58 * scale, y: 0, width: 256 * scale, height },
+            },
+            scene: ssd_hd::world::Scene::Field,
+            logical: ssd_hd::world::Rect { x: 58, y: 0, width: 256, height: 224 },
+            hud: ssd_hd::world::Rect { x: 58, y: 0, width: 256, height: 224 },
+            stats: ssd_hd::world::WideStats::default(),
+            art_pending: false,
+        })
+    }
+
+    fn painted_backdrop(
+        ctx: &egui::Context,
+        art: &mut Art,
+        picture: egui::Rect,
+    ) -> (egui::TextureId, Option<std::sync::Arc<egui::ColorImage>>) {
+        let mut list = DrawList::new();
+        list.push(Op::Backdrop);
+        let raw = egui::RawInput { screen_rect: Some(picture), ..Default::default() };
+        let output = ctx.run_ui(raw, |ui| paint(ui, picture, &list, art));
+        let id = art.backdrop.as_ref().expect("the backdrop was uploaded").2.id();
+        let mesh = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Mesh(mesh) if mesh.texture_id == id => Some(mesh),
+                _ => None,
+            })
+            .expect("the backdrop was painted");
+        assert_eq!(mesh.calc_bounds(), picture);
+        for uv in
+            [egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0), egui::pos2(1.0, 1.0)]
+        {
+            assert!(mesh.vertices.iter().any(|vertex| vertex.uv == uv));
+        }
+        let image =
+            output.textures_delta.set.get(&id).and_then(|deltas| deltas.last()).map(|delta| {
+                let egui::epaint::image::ImageData::Color(image) = &delta.image;
+                std::sync::Arc::clone(image)
+            });
+        output.drop_without_applying_deltas();
+        (id, image)
+    }
+
+    #[test]
+    fn the_menu_backdrop_matches_the_live_crop_and_filters_even_when_only_options_change() {
+        let ctx = egui::Context::default();
+        let (machine, _store) = crate::test_support::sram_counter_machine();
+        let frame = machine.frame();
+        let shapes = [
+            Shape::default(),
+            Shape { crop: true, filters: filter::Filters::default() },
+            Shape { crop: true, filters: filter::Filters { scanlines: 2, crt: 1 } },
+            Shape { crop: true, filters: filter::Filters { scanlines: 1, crt: 2 } },
+            Shape::default(),
+        ];
+        let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0));
+        for scale in [1, 2] {
+            let shared = patterned_field(scale);
+            let mut art = Art::empty();
+            art.note_field_shared(&shared);
+            for shape in shapes {
+                art.backdrop_shape = shape;
+                let mut buffer = Vec::new();
+                let live = filter::shape(
+                    GameView::enhanced(&shared.picture.picture, &frame, false),
+                    shape,
+                    &mut buffer,
+                );
+                let picture = crate::layout::picture_rect(
+                    1.0,
+                    area,
+                    live.width,
+                    live.height,
+                    live.pixel_aspect,
+                    false,
+                );
+                let (id, image) = painted_backdrop(&ctx, &mut art, picture);
+                let image = image.expect("a new video shape refreshes the frozen field");
+                let width = if shape.crop { 256 } else { 372 } * scale;
+                assert_eq!(image.size, [width as usize, (224 * scale) as usize]);
+                let expected = egui::ColorImage::from_rgba_unmultiplied(
+                    [live.width as usize, live.height as usize],
+                    live.rgba,
+                );
+                assert_eq!(image.pixels, expected.pixels, "{shape:?} at {scale}x");
+                assert_eq!(art.field.as_ref().unwrap().generation, shared.serial);
+                for size in [egui::vec2(2100.0, 900.0), egui::vec2(900.0, 2100.0)] {
+                    let stretched = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                    let (cached, uploaded) = painted_backdrop(&ctx, &mut art, stretched);
+                    assert_eq!(cached, id, "the destination does not change the source crop");
+                    assert!(uploaded.is_none(), "unchanged field and video shape stay cached");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_new_field_refreshes_the_backdrop_and_a_classic_frame_is_not_cropped() {
+        let ctx = egui::Context::default();
+        let mut art = Art::empty();
+        art.backdrop_shape.crop = true;
+        let picture = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut previous = None;
+        for colour in [20, 80] {
+            art.keep_field(
+                ssd_hd::world::next_serial(),
+                FieldSource::Pixels { width: 8, height: 6, rgba: vec![colour; 8 * 6 * 4] },
+            );
+            let (id, image) = painted_backdrop(&ctx, &mut art, picture);
+            let image = image.expect("a new field refreshes the texture");
+            assert_eq!(image.size, [8, 6], "a Classic frame has no extra map to crop");
+            assert_eq!(
+                image.pixels[0],
+                egui::Color32::from_rgba_unmultiplied(colour, colour, colour, colour)
+            );
+            assert_ne!(previous, Some(id));
+            previous = Some(id);
+        }
+    }
+
     #[test]
     fn the_cards_screen_names_each_kanji_as_the_battles_tooltip_does() {
         use ssd_menus::screens::cards::Card;
@@ -1419,6 +1652,236 @@ mod tests {
         assert_eq!(fit.point(0.0, 0.0), egui::pos2(0.0, 45.0), "centred vertically");
         let square = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(640.0, 720.0));
         assert!((Fit::new(square).scale - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stretch_aspect_4_3_fullscreen_keeps_portraits_square_on_a_4_3_display() {
+        let ctx = measuring_context();
+        let mut values = ssd_menus::options::Values::new();
+        values.set("video.aspect", 1);
+        values.set("video.display", 1);
+        let video = crate::options::video::VideoSettings::from_values(&values);
+        assert!(video.narrow && video.fullscreen);
+        let mut list = DrawList::sized(960.0, 720.0);
+        list.push(Op::Backdrop);
+        for x in [32.0, 824.0] {
+            list.push(Op::Portrait {
+                rect: Rect::new(x, 28.0, 104.0, 104.0),
+                picture: Some(Picture::Face(0)),
+            });
+        }
+        let games = [crate::canvas::GameImage {
+            id: egui::TextureId::User(42),
+            width: 256,
+            height: 224,
+            pixel_aspect: 8.0 / 7.0,
+        }];
+        let display = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(960.0, 720.0));
+        let mut expected = None;
+        // A 4:3 CRT may receive a 16:9 HDMI signal; its physical shape is not the framebuffer's shape.
+        for size in
+            [egui::vec2(960.0, 720.0), egui::vec2(1280.0, 720.0), egui::vec2(1920.0, 1080.0)]
+        {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let raw = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+            let mut art = Art::empty();
+            art.backdrop_shape = video.shape();
+            art.note_field_shared(&patterned_field(1));
+            let texture = ctx.load_texture(
+                "square portrait",
+                egui::ColorImage::from_rgba_unmultiplied([32, 32], &vec![255; 32 * 32 * 4]),
+                egui::TextureOptions::NEAREST,
+            );
+            let portrait_id = texture.id();
+            art.textures.insert(Picture::Face(0), Some(texture));
+            let output = ctx.run_ui(raw.clone(), |ui| crate::ui::draw_game(ui, &games, None, true));
+            assert!(output.shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::Mesh(mesh) if mesh.texture_id == games[0].id && mesh.calc_bounds() == screen
+            )), "the live game still fills the panel");
+            output.drop_without_applying_deltas();
+            let output = ctx.run_ui(raw.clone(), |ui| {
+                let layer = crate::ui::Layer { list: &list, art: &mut art, menu: true };
+                crate::ui::draw_game(ui, &games, Some(layer), true);
+            });
+            let physical = egui::emath::RectTransform::from_to(screen, display);
+            let portraits: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == portrait_id => {
+                        Some(physical.transform_rect(mesh.calc_bounds()))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(portraits.len(), 2);
+            for portrait in &portraits {
+                assert!(
+                    (portrait.width() - portrait.height()).abs() < 0.01,
+                    "{size:?}: {portrait:?}"
+                );
+                assert!(portrait.top() < 40.0, "no 16:9 vertical inset: {portrait:?}");
+            }
+            assert!(portraits[0].left() < 40.0 && portraits[1].right() > 920.0);
+            match &expected {
+                Some(previous) => {
+                    assert_eq!(&portraits, previous, "the physical layout is signal-independent");
+                }
+                None => expected = Some(portraits),
+            }
+            let id = art.backdrop.as_ref().unwrap().2.id();
+            assert!(
+                output.shapes.iter().any(|clipped| matches!(
+                    &clipped.shape,
+                    egui::Shape::Mesh(mesh) if mesh.texture_id == id && mesh.calc_bounds() == screen
+                )),
+                "the game backdrop still fills the same panel"
+            );
+            assert_eq!(art.backdrop.as_ref().unwrap().2.size(), [256, 224]);
+            output.drop_without_applying_deltas();
+            assert_eq!(art.menu_canvas(screen, false), screen, "Stretch off is unchanged");
+            art.backdrop_shape.crop = false;
+            assert_eq!(art.menu_canvas(screen, true), screen, "16:9 is unchanged");
+        }
+    }
+
+    #[test]
+    fn the_4_3_projection_includes_text_vertices_and_preserves_their_uvs() {
+        fn meshes(ctx: &egui::Context, mut output: egui::FullOutput) -> Vec<egui::epaint::Mesh> {
+            let shapes = std::mem::take(&mut output.shapes);
+            let primitives = ctx.tessellate(shapes, output.pixels_per_point);
+            output.drop_without_applying_deltas();
+            primitives
+                .into_iter()
+                .map(|primitive| {
+                    let egui::epaint::Primitive::Mesh(mesh) = primitive.primitive else {
+                        panic!("text should tessellate into a mesh");
+                    };
+                    mesh
+                })
+                .collect()
+        }
+
+        let ctx = measuring_context();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 720.0));
+        let mut art = Art::empty();
+        art.backdrop_shape.crop = true;
+        let canvas = art.menu_canvas(screen, true);
+        let mut list = DrawList::new();
+        list.text(300.0, 300.0, "MENU", 30.0, palette::BLACK, ssd_menus::Align::Left);
+        let output =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(canvas), ..Default::default() }, |ui| {
+                paint(ui, canvas, &list, &mut art);
+            });
+        let before = meshes(&ctx, output);
+        let output =
+            ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                paint_menu(ui, screen, &list, &mut art, true);
+            });
+        let after = meshes(&ctx, output);
+        assert_eq!((before.len(), after.len()), (1, 1));
+        assert_eq!(before[0].texture_id, after[0].texture_id);
+        assert_eq!(before[0].vertices.len(), after[0].vertices.len());
+        let projection = egui::emath::RectTransform::from_to(canvas, screen);
+        for (source, target) in before[0].vertices.iter().zip(&after[0].vertices) {
+            assert!((projection * source.pos - target.pos).length() < 0.001);
+            assert_eq!(source.uv, target.uv);
+            assert_eq!(source.color, target.color);
+        }
+    }
+
+    #[test]
+    fn the_quit_question_pointer_inverts_the_4_3_menu_projection() {
+        let ctx = measuring_context();
+        let screen = egui::Rect::from_min_size(egui::pos2(24.0, 40.0), egui::vec2(1280.0, 720.0));
+        let mut art = Art::empty();
+        art.backdrop_shape.crop = true;
+        let mut question = crate::quit_confirm::QuitConfirm::default();
+        let list = question.scene();
+        let (x, y) = list
+            .ops()
+            .iter()
+            .find_map(|op| match op {
+                Op::Text { x, y, text, .. } if text == "Yes" => Some((*x, *y)),
+                _ => None,
+            })
+            .unwrap();
+        let canvas = art.menu_canvas(screen, true);
+        let projection = egui::emath::RectTransform::from_to(canvas, screen);
+        // Near the top of the answer, not its centre: the old unprojected hit test misses this point.
+        let at = projection * Fit::new(canvas).point(x, y - 20.0);
+        let games = [crate::canvas::GameImage {
+            id: egui::TextureId::User(42),
+            width: 256,
+            height: 224,
+            pixel_aspect: 8.0 / 7.0,
+        }];
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut answer = None;
+        for events in [vec![egui::Event::PointerMoved(at)], vec![button(true), button(false)]] {
+            let output = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(screen), events, ..Default::default() },
+                |ui| {
+                    let layer = crate::ui::Layer { list: &list, art: &mut art, menu: true };
+                    crate::ui::draw_game(ui, &games, Some(layer), true);
+                    answer = crate::ui::quit_confirm_pointer(ui, &mut question);
+                },
+            );
+            output.drop_without_applying_deltas();
+        }
+        assert_eq!(answer, Some(crate::quit_confirm::Outcome::Quit));
+    }
+
+    #[test]
+    fn the_4_3_hud_fills_the_canvas_and_its_quit_question_remains_clickable() {
+        let ctx = measuring_context();
+        let mut question = crate::quit_confirm::QuitConfirm::default();
+        let list = question.scene_sized(960.0, 720.0);
+        for size in [egui::vec2(960.0, 720.0), egui::vec2(1280.0, 720.0)] {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            let mut art = Art::empty();
+            art.backdrop_shape.crop = true;
+            let canvas = art.menu_canvas(screen, true);
+            let fit = Fit::for_list(canvas, &list);
+            assert_eq!(fit.rect(Rect::new(0.0, 0.0, 960.0, 720.0)), canvas);
+            let projection = egui::emath::RectTransform::from_to(canvas, screen);
+            let at = projection * fit.point(600.0, 390.0);
+            let mut answer = None;
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(screen),
+                    events: vec![
+                        egui::Event::PointerMoved(at),
+                        egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed: true,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                        egui::Event::PointerButton {
+                            pos: at,
+                            button: egui::PointerButton::Primary,
+                            pressed: false,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                    ..Default::default()
+                },
+                |ui| {
+                    let layer = crate::ui::Layer { list: &list, art: &mut art, menu: true };
+                    crate::ui::draw_game(ui, &[], Some(layer), true);
+                    answer = crate::ui::quit_confirm_pointer(ui, &mut question);
+                },
+            );
+            output.drop_without_applying_deltas();
+            assert_eq!(answer, Some(crate::quit_confirm::Outcome::Quit), "{size:?}");
+        }
     }
 
     /// The egui context the menus' text is measured with: the theme's fonts, laid out once. The
@@ -1594,28 +2057,24 @@ mod tests {
         };
         let mut screens = Vec::new();
         for cursor in 0..5 {
-            screens.push(ssd_menus::screens::command(&MenuView { cursor, ..base.clone() }));
+            let view = MenuView { cursor, ..base.clone() };
+            screens.push(ssd_menus::screens::command(&view));
+            screens.push(ssd_menus::screens::scene_aspect(&view, true));
         }
         for cursor in 0..4 {
-            screens.push(ssd_menus::screens::command(&MenuView {
-                town: true,
-                cursor,
-                ..base.clone()
-            }));
+            let view = MenuView { town: true, cursor, ..base.clone() };
+            screens.push(ssd_menus::screens::command(&view));
+            screens.push(ssd_menus::screens::scene_aspect(&view, true));
         }
         for cursor in 0..3 {
-            screens.push(ssd_menus::screens::command(&MenuView {
-                flying: true,
-                cursor,
-                ..base.clone()
-            }));
+            let view = MenuView { flying: true, cursor, ..base.clone() };
+            screens.push(ssd_menus::screens::command(&view));
+            screens.push(ssd_menus::screens::scene_aspect(&view, true));
         }
         for cursor in 0..7 {
-            screens.push(ssd_menus::screens::scene(&MenuView {
-                screen: Screen::Menu,
-                cursor,
-                ..base.clone()
-            }));
+            let view = MenuView { screen: Screen::Menu, cursor, ..base.clone() };
+            screens.push(ssd_menus::screens::scene(&view));
+            screens.push(ssd_menus::screens::scene_aspect(&view, true));
         }
         let items: Vec<Slot> = (0..24)
             .map(|i| Slot { object: i, attribute: 0xC0, name: "Dragon Radar Plus".into() })
@@ -1763,10 +2222,14 @@ mod tests {
                     let picture =
                         crate::layout::picture_rect(ppp, area, width, height, aspect, whole);
                     assert!(area.contains_rect(picture), "{picture:?} in {area:?}");
-                    let fit = Fit::new(picture);
-                    let canvas = fit.rect(Rect::new(0.0, 0.0, layout::WIDTH, layout::HEIGHT));
-                    assert!(picture.expand(0.01).contains_rect(canvas), "the logical space fits");
                     for (index, list) in screens.iter().enumerate() {
+                        let fit = Fit::for_list(picture, list);
+                        let (width, height) = list.canvas_size();
+                        let canvas = fit.rect(Rect::new(0.0, 0.0, width, height));
+                        assert!(
+                            picture.expand(0.01).contains_rect(canvas),
+                            "the logical space fits"
+                        );
                         for boxed in painted_boxes(&ctx, &fit, list) {
                             assert!(
                                 picture.expand(0.01).contains_rect(boxed),

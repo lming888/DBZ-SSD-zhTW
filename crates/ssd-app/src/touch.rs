@@ -1194,6 +1194,12 @@ impl Touch {
         self.visible().then_some(self.geo.picture)
     }
 
+    /// Stretch stays active even when a gamepad hides the touch controls.
+    #[must_use]
+    pub fn stretches_picture(&self) -> bool {
+        self.enabled && self.settings.picture == settings::Picture::Stretch
+    }
+
     /// The orientation of the layout.
     #[must_use]
     pub fn orient(&self) -> Orient {
@@ -1248,9 +1254,12 @@ mod tests {
             t.settings.auto_battle = on;
             t.settings.hide_pad = on;
             t.settings.show_fps = on;
-            for picture in
-                [settings::Picture::Standard, settings::Picture::Large, settings::Picture::Full]
-            {
+            for picture in [
+                settings::Picture::Standard,
+                settings::Picture::Large,
+                settings::Picture::Full,
+                settings::Picture::Stretch,
+            ] {
                 t.settings.picture = picture;
                 take(t);
             }
@@ -1333,7 +1342,7 @@ mod tests {
         let (title, labels, _) = &panels[3];
         assert_eq!(title, "GAME");
         assert_eq!(labels[0], "Tap again: restart");
-        let (title, labels, note) = &panels[11];
+        let (title, labels, note) = &panels[12];
         assert_eq!(title, "TOUCH OPTIONS");
         assert_eq!(
             labels,
@@ -1415,6 +1424,54 @@ mod tests {
         t.debug = true;
         let ids: Vec<PBtn> = t.panel().unwrap().buttons.iter().map(|b| b.id).collect();
         assert!(ids.contains(&PBtn::OptFps), "Show FPS with the debug tools on: {ids:?}");
+    }
+
+    #[test]
+    fn the_picture_button_cycles_through_stretch_and_saves_each_choice() {
+        let mut t = touch();
+        t.mode = Mode::Options;
+        for picture in [
+            settings::Picture::Large,
+            settings::Picture::Full,
+            settings::Picture::Stretch,
+            settings::Picture::Standard,
+        ] {
+            t.panel_press(PBtn::OptPicture);
+            assert_eq!(t.settings.picture, picture);
+            assert!(t.take_out().contains(&Out::Persist));
+            assert!(t.panel().unwrap().buttons.iter().any(|button| {
+                button.id == PBtn::OptPicture
+                    && button.label == format!("Picture: {}", picture.name())
+            }));
+            if picture == settings::Picture::Stretch {
+                assert_eq!(t.geometry().picture, t.geometry().screen);
+            }
+        }
+    }
+
+    #[test]
+    fn stretch_is_kept_when_a_gamepad_hides_the_controls_but_not_when_touch_is_disabled() {
+        let mut t = touch();
+        t.settings.picture = settings::Picture::Stretch;
+        t.set_status("x1", 1, true, false);
+        assert!(!t.visible());
+        assert!(t.picture_area().is_none());
+        assert!(t.stretches_picture());
+        t.enabled = false;
+        assert!(!t.stretches_picture());
+    }
+
+    #[test]
+    fn stretch_is_translated_in_both_bundled_languages() {
+        let tables = [
+            include_str!("../../../translations/zh-tw/ui-zh-tw.tsv"),
+            include_str!("../../../translations/zh-hk/ui-zh-hk.tsv"),
+        ];
+        let mut t = touch();
+        for table in tables {
+            t.set_words(Some(std::sync::Arc::new(ssd_menus::ui_text::UiText::parse(table))));
+            assert_eq!(t.tr("Picture: Stretch"), "畫面：拉伸");
+        }
     }
 
     #[test]

@@ -121,11 +121,20 @@ impl QuitConfirm {
     /// The window in the menus' logical space (English words: the HD layer translates them).
     #[must_use]
     pub fn scene(self) -> DrawList {
-        let mut list = DrawList::new();
-        list.push(Op::Window { rect: WINDOW });
+        self.scene_sized(WIDTH, HEIGHT)
+    }
+
+    /// The same question centred on the field HUD's canvas.
+    #[must_use]
+    pub fn scene_sized(self, width: f32, height: f32) -> DrawList {
+        let mut list = DrawList::sized(width, height);
+        let dx = (width - WIDTH) / 2.0;
+        let dy = (height - HEIGHT) / 2.0;
+        let window = Rect::new(WINDOW.x + dx, WINDOW.y + dy, WINDOW.w, WINDOW.h);
+        list.push(Op::Window { rect: window });
         list.text(
-            WIDTH / 2.0,
-            QUESTION_Y,
+            width / 2.0,
+            QUESTION_Y + dy,
             "Quit the game?",
             LARGE_TEXT,
             palette::BLACK,
@@ -136,12 +145,21 @@ impl QuitConfirm {
         {
             let on = self.choice() == choice;
             if on {
-                let chip = chip(centre);
+                let mut chip = chip(centre);
+                chip.x += dx;
+                chip.y += dy;
                 list.fill(chip, palette::ORANGE);
                 list.push(Op::Outline { rect: chip, width: LINE, color: palette::DARK_RED });
             }
             let color = if on { palette::CREAM } else { palette::BLACK };
-            list.text(centre, chip(centre).middle_y(), label, ANSWER_TEXT, color, Align::Centre);
+            list.text(
+                centre + dx,
+                chip(centre).middle_y() + dy,
+                label,
+                ANSWER_TEXT,
+                color,
+                Align::Centre,
+            );
         }
         list
     }

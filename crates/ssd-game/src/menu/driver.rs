@@ -184,6 +184,10 @@ struct State {
     mods_request: Option<Request>,
     /// The Order screen's cursor and the order it holds, until "Apply order" has the original take it.
     order: OrderNav,
+    /// Fly or Land was chosen from the HD command window and is running or closing in the original.
+    travel_lifted: bool,
+    /// Frames after `field_free()` turns true during which NMI finishes clearing BG1/BG3 tilemaps.
+    travel_tail: u8,
 }
 
 /// The frames a second the video question counts its ten seconds in (the console's rate, which the host paces to).
@@ -250,6 +254,8 @@ impl Driver {
                 mods_alert: None,
                 mods_request: None,
                 order: OrderNav::default(),
+                travel_lifted: false,
+                travel_tail: 0,
             },
         }
     }
@@ -483,6 +489,8 @@ impl Driver {
             mods_alert: None,
             mods_request: None,
             order: OrderNav::default(),
+            travel_lifted: false,
+            travel_tail: 0,
         };
     }
 
@@ -702,6 +710,26 @@ impl Driver {
         let probe = MenuProbe::new(wram, &self.labels);
         self.state.scene(&probe, &self.labels)
     }
+
+    /// The field command has handed Fly or Land to the original. Its animation is live, but
+    /// its old command window must not flash through the HD menu while running or closing.
+    #[must_use]
+    pub fn travel_transition(&self, wram: &[u8]) -> bool {
+        let probe = MenuProbe::new(wram, &self.labels);
+        if probe.in_battle() {
+            return false;
+        }
+        if self.state.travel_lifted {
+            return matches!(self.state.curtain, Curtain::Lifted | Curtain::Up);
+        }
+        if self.state.travel_tail > 0 && self.state.curtain == Curtain::Down && !probe.menu_open() {
+            return true;
+        }
+        self.state.curtain == Curtain::Lifted
+            && self.state.nav.screen() == Screen::Command
+            && !probe.field_free()
+            && matches!(probe.screen(), Some(1 | 5))
+    }
 }
 
 impl State {
@@ -836,6 +864,10 @@ impl State {
             }
             Action::Choose(entry) => {
                 if let Some((steps, arrival)) = choice(screen, entry, flying, town) {
+                    if matches!(entry, Entry::Fly | Entry::Land) {
+                        self.travel_lifted = true;
+                        self.travel_tail = 0;
+                    }
                     self.start(steps, arrival);
                 }
             }
@@ -1234,6 +1266,17 @@ impl State {
         live: Joypad,
         events: &mut Vec<HostEvent>,
     ) -> Joypad {
+        if self.travel_tail > 0 {
+            if self.curtain != Curtain::Down
+                || probe.in_battle()
+                || probe.menu_open()
+                || !probe.field_free()
+            {
+                self.travel_tail = 0;
+            } else {
+                self.travel_tail -= 1;
+            }
+        }
         if self.running.is_none() {
             self.observe(probe);
         }
@@ -1335,7 +1378,8 @@ impl State {
             view.selected = self.selected(labels, probe.encounter_group());
         }
         let unbound = view.screen == Screen::Items && view.bag.is_none();
-        let mut list = screens::scene(&view);
+        let narrow = video::index(&self.options.pc, "video.aspect") == 1;
+        let mut list = screens::scene_aspect(&view, narrow);
         // A bag not bound yet shows the original's list, which has no foot for a line: the notice goes on top.
         if let Some(text) = self.notice.filter(|_| unbound) {
             list.append(screens::notice(text));
@@ -1778,6 +1822,9 @@ impl State {
         if self.curtain == Curtain::Down {
             self.battle_cheats = false;
             self.battle_items = false;
+            if std::mem::take(&mut self.travel_lifted) {
+                self.travel_tail = 4;
+            }
         }
     }
 
@@ -1806,6 +1853,9 @@ impl State {
             self.nav = Nav::default();
             self.battle_cheats = false;
             self.battle_items = false;
+            if std::mem::take(&mut self.travel_lifted) {
+                self.travel_tail = 4;
+            }
         }
     }
 }
@@ -2014,6 +2064,17 @@ mod tests {
         assert_eq!(driver.curtain(), Curtain::Up);
         assert_eq!(frame(&mut driver, &mut menu, a), Joypad::default(), "live keys go to the HD");
         assert_eq!(driver.nav().screen(), Screen::Command);
+    }
+
+    #[test]
+    fn the_video_aspect_selects_the_field_hud_canvas_and_can_be_reverted() {
+        let mut driver = Driver::new(Labels::default());
+        let mut menu = FakeMenu::default();
+        open_by_player(&mut driver, &mut menu);
+        for (aspect, width) in [(0, 1280.0), (1, 960.0), (0, 1280.0)] {
+            driver.pc_options_mut().set("video.aspect", aspect);
+            assert_eq!(driver.scene(&menu.wram()).unwrap().canvas_size(), (width, 720.0));
+        }
     }
 
     #[test]
@@ -2564,6 +2625,45 @@ mod tests {
         }
         assert!(menu.flying, "the party flies");
         assert_eq!(driver.curtain(), Curtain::Down);
+    }
+
+    #[test]
+    fn travel_presentation_covers_takeoff_and_landing_but_not_talk() {
+        for flying in [false, true] {
+            let mut driver = Driver::new(Labels::default());
+            let mut menu = FakeMenu::default();
+            menu.flying = flying;
+            open_by_player(&mut driver, &mut menu);
+            assert!(!driver.travel_transition(&menu.wram()));
+            if !flying {
+                driver.key(Key::Down, &menu.wram());
+                driver.key(Key::Down, &menu.wram());
+            }
+            driver.key(Key::Confirm, &menu.wram());
+            let mut seen = false;
+            let mut seen_closing_screen = false;
+            for _ in 0..240 {
+                frame(&mut driver, &mut menu, Joypad::default());
+                if driver.curtain() == Curtain::Lifted && menu.field != 0 {
+                    assert!(driver.travel_transition(&menu.wram()));
+                    seen = true;
+                    // Even when the original switches to its closing screen (3) before field_free,
+                    // the command window must remain suppressed.
+                    let mut closing = menu.wram();
+                    closing[(d::MENU_SCREEN - 0x7E_0000) as usize] = 3;
+                    assert!(driver.travel_transition(&closing));
+                    seen_closing_screen = true;
+                }
+            }
+            assert!(seen && seen_closing_screen);
+            assert!(!driver.travel_transition(&menu.wram()));
+            assert_eq!(menu.flying, !flying);
+        }
+        let mut driver = Driver::new(Labels::default());
+        let mut menu = FakeMenu::default();
+        open_by_player(&mut driver, &mut menu);
+        choose(&mut driver, &mut menu, Key::Confirm);
+        assert!(!driver.travel_transition(&menu.wram()), "Talk remains the original's message");
     }
 
     #[test]

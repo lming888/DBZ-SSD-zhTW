@@ -104,7 +104,7 @@ pub fn orient_of(screen: Rect) -> Orient {
 /// The space kept between two groups a short screen pushes together, in dp.
 const GAP: f32 = 8.0;
 /// The size of the controls of the Large picture and of the full screen, on top of the player's: smaller, so the
-/// picture has the room.
+/// picture has the room. Stretch uses the same compact controls.
 const COMPACT: f32 = 0.85;
 /// The parts of the portrait band its rows are at (the design's band is 270..932): the top row, the d-pad and the
 /// diamond, Start/Select.
@@ -134,7 +134,7 @@ fn band_top(w: f32, h: f32, picture: Picture) -> f32 {
     match picture {
         Picture::Standard => standard,
         Picture::Large => (28.0 + w * FULL_WIDTH).min(h - least_band(COMPACT)).max(standard),
-        Picture::Full => (h - least_band(COMPACT)).max(0.0),
+        Picture::Full | Picture::Stretch => (h - least_band(COMPACT)).max(0.0),
     }
 }
 
@@ -222,7 +222,7 @@ pub fn compute(screen: Rect, minimal: bool, settings: &Settings) -> Geometry {
     let (picture, band) = match (o, settings.picture) {
         // The full screen: the picture as big as the screen holds (in portrait from the top, the width's height),
         // the controls over it.
-        (Orient::Landscape, Picture::Full) => (screen, None),
+        (_, Picture::Stretch) | (Orient::Landscape, Picture::Full) => (screen, None),
         (Orient::Portrait, Picture::Full) => {
             let bottom = screen.min.y + h.min(w * FULL_WIDTH);
             (Rect::from_min_max(screen.min, pos2(screen.max.x, bottom)), None)
@@ -438,7 +438,7 @@ mod tests {
             (841.0, 337.0),
             (800.0, 360.0),
         ];
-        let pictures = [Picture::Standard, Picture::Large, Picture::Full];
+        let pictures = [Picture::Standard, Picture::Large, Picture::Full, Picture::Stretch];
         for ((w, h), picture) in sizes.into_iter().flat_map(|s| pictures.map(|p| (s, p))) {
             let s = screen(w, h);
             let g = compute(s, false, &Settings { picture, ..Settings::default() });
@@ -464,7 +464,9 @@ mod tests {
                         "{a:?} {ra:?} covers {b:?} {rb:?} on {w}x{h} ({picture:?})"
                     );
                 }
-                if g.orient == Orient::Portrait && picture != Picture::Full {
+                if g.orient == Orient::Portrait
+                    && matches!(picture, Picture::Standard | Picture::Large)
+                {
                     assert!(
                         ra.min.y >= g.picture.max.y,
                         "{a:?} {ra:?} on the picture on {w}x{h} ({picture:?})"
@@ -497,6 +499,25 @@ mod tests {
             (tall.picture.height() - 787.0 * FULL_WIDTH).abs() < 0.5,
             "the width's height, from the top"
         );
+    }
+
+    #[test]
+    fn stretch_uses_every_edge_of_the_panel_in_both_orientations() {
+        let settings = Settings { picture: Picture::Stretch, ..Settings::default() };
+        for (w, h) in [(1600.0, 900.0), (2100.0, 900.0), (900.0, 1600.0), (900.0, 2100.0)] {
+            let screen = screen(w, h).translate(vec2(12.0, 24.0));
+            for minimal in [false, true] {
+                let geometry = compute(screen, minimal, &settings);
+                assert_eq!(geometry.picture, screen);
+                assert!(geometry.band.is_none());
+                assert!(
+                    geometry
+                        .items
+                        .iter()
+                        .all(|item| { screen.expand(1.0).contains_rect(item.shape.bounds()) })
+                );
+            }
+        }
     }
 
     #[test]

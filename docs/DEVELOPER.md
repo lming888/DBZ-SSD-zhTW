@@ -150,6 +150,20 @@ the town, so `FieldState::in_room` reads the size and the grid from the table re
 (after a load, a battle or a scene), `$06` (after a flight) or `$05`: the map the party walks back to after a building
 (`$01`), where it stays until the next battle, so the art is drawn in all three.
 
+### Fly/Land transition in the 4:3 view
+
+Fly/Land still run the original menu plan and animation. From the command's
+`Entry::Fly` / `Entry::Land` choice through `Curtain::Lifted` (including the
+closing screen before `field_free`) and a short NMI drain tail after
+`field_free`, the app suppresses the native field faces and windows on BG1/BG3 in
+the render log, not in emulated VRAM. BG2, OBJ, scroll, Mode 7, and the original
+joypad timeline remain unchanged. The presentation switch invalidates shared
+pictures and is also applied to pipelined drawing. Classic and the 16:9
+presentation do not opt into these changes.
+
+Focused regressions: `cargo test -p ssd-hd --lib hide_field_ui` and
+`cargo test -p ssd-game --lib travel_presentation`.
+
 ## Keys
 
 Arrows = D-pad, X = A, Z = B, S = X, A = Y, Q = L, W = R, Enter = Start, Right Shift = Select.
@@ -401,7 +415,21 @@ video changes?": Keep writes it to `ssd.settings`, Revert (B) puts the old choic
 reverts (the cursor starts on Revert). A `--hd-scale` or `--enhanced-look` flag wins for its run until that very row is
 changed on the page; headless runs, snapshots and replays ignore the saved file. Scanlines, the CRT filter and the 4:3 crop
 are a last pass of the app over the picture (`crates/ssd-app/src/filter.rs`), not part of `ssd-hd`: with them off the picture
-is the renderer's own, byte for byte.
+is the renderer's own, byte for byte. The frozen backdrop behind the HD menus uses the same pass, including the original
+window's crop in 4:3, rather than squeezing the whole widescreen field into the narrower picture. Its texture is refreshed
+when the field or video choices change, so previewing and reverting Aspect while a menu is open stays consistent with live
+play. Window screenshots and UI snapshots use the same backdrop.
+
+With Android's Stretch picture and Aspect 4:3, HD menus are first drawn on a 4:3 canvas, then projected into the same
+destination as the cropped game. This also applies in Fullscreen: a 4:3 CRT can receive a 16:9 framebuffer and scale it
+physically, so fitting the menu to the framebuffer alone makes square portraits look tall. The projection includes
+tessellated text, portraits, cards, window frames and clipping, without changing their layout or proportions on the
+4:3 canvas. With Aspect 4:3 the field command and Menu HUD use a true 960 x 720 logical layout: portraits stay at the
+top corners, money stays top-centred, and command/help windows sit along the bottom, without a 16:9 band of empty
+space above and below. Their sizes and text proportions are preserved; the detailed screens retain their existing
+layout. This HUD layout also applies with Stretch off. The game picture, frozen backdrop pixels, field overlays and
+Aspect 16:9 are unchanged. Window screenshots use the same projection, and the centred quit question's pointer uses
+its inverse.
 
 The Accessibility page (this PC, keys `access.text_size`, `access.contrast`, `access.cursor`) changes how all the HD menus look (Menu, Items, Cheats,
 Options and the notices), never the game's own picture or Classic: Text size (Large makes every text a quarter bigger where there
@@ -598,9 +626,13 @@ controls' alone.
   rows are parts of that band, so on a short screen (a split screen, a window, a Fold's halves) no group covers another or
   the picture; a test checks every group at nine screen sizes, both ways.
 - Picture (Touch options): Standard (the design), Large (the controls at 85% and packed toward the edges; in portrait the
-  picture takes the whole width where the band still fits) or Full screen (the picture as big as the screen holds, the
-  controls floating over it at their opacity). With the touch controls an Enhanced picture fills its area at any scale
-  (`layout::fit_any`); the Classic frame and the desktop keep whole scales.
+  picture takes the whole width where the band still fits), Full screen (the picture as big as the screen holds, the
+  controls floating over it at their opacity), or Stretch. Stretch fills the entire panel in landscape and portrait,
+  including 16:9 and 21:9 phones, without cropping or preserving the picture's aspect ratio: characters and scenery
+  become wider or taller. It uses the same compact controls as Full screen and stays active when a gamepad hides them.
+  The HD menu backdrop and window screenshots follow the stretched picture; menu text and touch buttons keep their
+  proportions. Standard remains the default. In the other modes an Enhanced picture fills its area at any scale
+  (`layout::fit_any`) with the touch controls; the Classic frame and the desktop keep whole scales.
 - MENU pauses: Save state and Load state (the current slot; State slot picks it, 1 to 4), Options (the touch options), Edit layout, Hide controls (a chip
   at the top right brings them back), Resume, and a GAME page with Restart game and Quit, each on a second tap (the play
   since the last save is lost; on Android the launch loop starts the game again, `android_setup::Forced::Relaunch`). The
@@ -614,7 +646,7 @@ controls' alone.
 - Edit layout: tap a group to select it, drag it, drag a corner handle or use +/- for the size (100 to 180%, so never under
   48 dp), opacity, Reset to default, Done. The layout is kept per device in `saves/ssd.settings` under `controls.touch.*`
   (`style`, `opacity` as a step of five percent, `haptics`, `auto_battle`, `hide_pad`, `picture` (0 Standard, 1 Large, 2 Full
-  screen), `show_fps`, and `<group>.x|y|s` or
+  screen, 3 Stretch), `show_fps`, and `<group>.x|y|s` or
   `p.<group>.x|y|s` for the portrait layout: the centre in per mille of the screen and the size in percent).
 - Options > Controls > Turbo (the Device row's fourth page, for every device): Turbo Off, A or A+B and the presses per second
   (15, 20 or 30; `controls.turbo.mode` and `controls.turbo.rate` in `saves/ssd.settings`). While a turbo button is held the game

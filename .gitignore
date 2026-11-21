@@ -9,6 +9,8 @@
 /android/app/build/
 /android/app/src/main/java/org/
 /android/app/src/main/jniLibs/
+# Local APK signing keys and encrypted credentials must never be committed.
+/android/signing/
 
 # The game's ROM, the saves and replays of a play-through, and anything made from them never belong
 # in the repository (`cargo xtask publish-check` refuses them too)
@@ -43,3 +45,5 @@ __pycache__/
 # (https://github.com/JackRushante/DBZ-Super-Saiya-Densetsu-Rust/releases/tag/v0.3.9), not a file of the repository
 /hd-pack/
 /hd-pack.zip
+crt-screenshot/20261120_023124.jpg
+/crt-screenshot

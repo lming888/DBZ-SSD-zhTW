@@ -69,29 +69,37 @@ pub fn scene(view: &MenuView) -> DrawList {
     }
 }
 
+/// The field HUD uses the full 4:3 canvas when narrow; the detailed screens retain their design.
+#[must_use]
+pub fn scene_aspect(view: &MenuView, narrow: bool) -> DrawList {
+    if narrow && matches!(view.screen, Screen::Command | Screen::Menu) {
+        let rows = if view.screen == Screen::Menu { &MENU_ROWS[..] } else { commands(view) };
+        field_menu(view, HEIGHT * 4.0 / 3.0, rows)
+    } else {
+        scene(view)
+    }
+}
+
 /// The field's command window, with the party's corners and the money.
 #[must_use]
 pub fn command(view: &MenuView) -> DrawList {
-    let mut list = DrawList::new();
-    backdrop(&mut list);
-    party(&mut list, view);
-    zeni(&mut list, view.zeni);
-    let rows = commands(view);
-    list_window(&mut list, rows, view.cursor);
-    help_window(&mut list, rows, view.cursor);
-    list
+    field_menu(view, WIDTH, commands(view))
 }
 
 /// The Menu list: the party's corners and the money as on the field, then the list of Cards, Status,
 /// Order, Text and Save, with Cheats and Options greyed out.
 #[must_use]
 pub fn menu_list(view: &MenuView) -> DrawList {
-    let mut list = DrawList::new();
+    field_menu(view, WIDTH, &MENU_ROWS)
+}
+
+fn field_menu(view: &MenuView, width: f32, rows: &[Entry]) -> DrawList {
+    let mut list = DrawList::sized(width, HEIGHT);
     backdrop(&mut list);
     party(&mut list, view);
     zeni(&mut list, view.zeni);
-    list_window(&mut list, &MENU_ROWS, view.cursor);
-    help_window(&mut list, &MENU_ROWS, view.cursor);
+    list_window(&mut list, rows, view.cursor);
+    help_window(&mut list, rows, view.cursor);
     list
 }
 
@@ -126,7 +134,9 @@ fn backdrop(list: &mut DrawList) {
 
 /// The party's corner pictures with their HP and KI bars, in party order (two corners).
 fn party(list: &mut DrawList, view: &MenuView) {
-    for (member, &x) in view.party.iter().take(2).zip(CORNERS.iter()) {
+    let (width, _) = list.canvas_size();
+    let corners = [CORNER_INSET, width - CORNER_INSET - CORNER_PORTRAIT];
+    for (member, &x) in view.party.iter().take(2).zip(corners.iter()) {
         let frame = Rect::new(x, CORNER_TOP, CORNER_PORTRAIT, CORNER_PORTRAIT);
         list.push(Op::Portrait { rect: frame, picture: member.face.map(Picture::Face) });
         let hp = frame.bottom() + 14.0;
@@ -143,9 +153,6 @@ fn party(list: &mut DrawList, view: &MenuView) {
         );
     }
 }
-
-/// Where the corner pictures of the field menu sit: the left one and the right one, 28 px down.
-const CORNERS: [f32; 2] = [CORNER_INSET, WIDTH - CORNER_INSET - CORNER_PORTRAIT];
 
 /// One row of a member's gauges: where it starts, how wide the column is, its label and its fill.
 struct GaugeRow {
@@ -170,7 +177,8 @@ fn gauge_row(list: &mut DrawList, row: GaugeRow, amount: (u16, u16)) {
 
 /// The money, centred at the top of the field menu.
 fn zeni(list: &mut DrawList, zeni: u16) {
-    let window = Rect::new((WIDTH - 240.0) / 2.0, 36.0, 240.0, 72.0);
+    let (width, _) = list.canvas_size();
+    let window = Rect::new((width - 240.0) / 2.0, 36.0, 240.0, 72.0);
     list.push(Op::Window { rect: window });
     let text = format!("Zeni {zeni:03}P");
     list.text(
@@ -223,7 +231,8 @@ fn list_window(list: &mut DrawList, rows: &[Entry], cursor: u8) {
 fn help_window(list: &mut DrawList, rows: &[Entry], cursor: u8) {
     let help = rows.get(usize::from(cursor)).map_or("", |entry| entry.help());
     let height = help_height(1);
-    let window = Rect::new(WIDTH - MARGIN - 560.0, HEIGHT - MARGIN - height, 560.0, height);
+    let (width, _) = list.canvas_size();
+    let window = Rect::new(width - MARGIN - 560.0, HEIGHT - MARGIN - height, 560.0, height);
     list.push(Op::Window { rect: window });
     list.text(
         window.x + FRAME + 22.0,
@@ -2132,6 +2141,52 @@ mod tests {
         assert_eq!(cursors(&list).len(), 1, "the cursor is on Options");
         view.cursor = 5;
         assert!(texts(&scene(&view)).contains(&"Set the cheats of this run."));
+    }
+
+    #[test]
+    fn the_4_3_hud_anchors_the_party_money_and_windows_to_the_full_canvas() {
+        for (screen, town, flying) in [
+            (Screen::Command, false, false),
+            (Screen::Command, true, false),
+            (Screen::Command, false, true),
+            (Screen::Menu, false, false),
+        ] {
+            let view = MenuView { screen, town, flying, ..field_view(0) };
+            let list = scene_aspect(&view, true);
+            assert_eq!(list.canvas_size(), (960.0, 720.0));
+            assert_eq!(scene_aspect(&view, false), scene(&view), "16:9 is unchanged");
+            let portraits: Vec<_> = list
+                .ops()
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Portrait { rect, .. } => Some(*rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                portraits,
+                [Rect::new(32.0, 28.0, 104.0, 104.0), Rect::new(824.0, 28.0, 104.0, 104.0),]
+            );
+            let windows: Vec<_> = list
+                .ops()
+                .iter()
+                .filter_map(|op| match op {
+                    Op::Window { rect } => Some(*rect),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(windows.len(), 3);
+            assert_eq!(windows[0], Rect::new(360.0, 36.0, 240.0, 72.0));
+            assert_eq!(windows[1].bottom(), 680.0);
+            assert_eq!(windows[2].bottom(), 680.0);
+            assert_eq!(windows[2].right(), 920.0);
+            assert!(windows[1].right() + 40.0 <= windows[2].x, "no window overlap");
+            let styled = crate::Style { large_text: true, contrast: true, safe_cursor: true }
+                .apply(list.clone());
+            assert_eq!(styled.canvas_size(), list.canvas_size());
+        }
+        let view = items_view(8, 0, 0);
+        assert_eq!(scene_aspect(&view, true), scene(&view), "the bag keeps its design");
     }
 
     #[test]

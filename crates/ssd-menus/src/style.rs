@@ -83,7 +83,8 @@ impl Style {
             })
             .collect();
         let sizes = if self.large_text { text_sizes(ops, &windows) } else { Vec::new() };
-        let mut out = DrawList::new();
+        let (width, height) = list.canvas_size();
+        let mut out = DrawList::sized(width, height);
         // Where each text run of `list` is in `out`, for the marks of the runs drawn as one text (DrawList::keep_marks).
         let mut moved: Vec<Option<usize>> = vec![None; ops.len()];
         // The fills turned black by high contrast: a text on one of them is white.

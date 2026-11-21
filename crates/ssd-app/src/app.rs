@@ -765,7 +765,11 @@ fn with_quit_confirm(
     let Some(question) = state.quit_confirm.as_ref() else {
         return (scene, overlay);
     };
-    let list = question.scene();
+    let (width, height) = scene.as_ref().map_or(
+        (ssd_menus::layout::WIDTH, ssd_menus::layout::HEIGHT),
+        ssd_menus::DrawList::canvas_size,
+    );
+    let list = question.scene_sized(width, height);
     let list = match state.hd.as_ref() {
         Some(hd) => hd.dressed(list),
         None => list,
@@ -1089,6 +1093,7 @@ enum Draw {
 /// the picture of a fast-forward's batch is that of its last frame.
 fn note_view(state: &mut WindowState, machine: &Machine, draw: Draw) {
     let Some(hd) = state.hd.as_mut() else { return };
+    hd.prepare_view(machine.wram(), state.video.narrow);
     // The transformation's lightning, by the watch of its voice: none for a frame the watch did not note (a state loaded)
     hd.set_ssj_lightning(state.ssj_watch.lightning_at(machine.frame_count()));
     if draw == Draw::Skip {
@@ -2745,7 +2750,8 @@ fn windowed_loop(
             env.verify.as_ref(),
             state.video.linear(),
         );
-        let views = shape_views(views, state.video.shape(), &mut shape_buffer);
+        let shape = state.video.shape();
+        let views = shape_views(views, shape, &mut shape_buffer);
         // The HD menu on screen, from this frame's state: nothing on the field, nothing in Classic.
         let scene = state.hd.as_ref().and_then(|hd| hd.scene(machine.wram()));
         let overlay = state.hd.as_ref().and_then(|hd| hd.overlay(machine.wram(), machine.sram()));
@@ -2755,7 +2761,7 @@ fn windowed_loop(
         let panel = &mut state.panel;
         let asking = &mut state.quit_confirm;
         let mut answer = None;
-        let mut hd_art = state.hd.as_mut().map(Hd::art);
+        let mut hd_art = state.hd.as_mut().map(|hd| hd.art(shape));
         if hd_art.is_none() && asking.is_some() {
             hd_art = Some(&mut plain_art);
         }
@@ -2798,6 +2804,7 @@ fn windowed_loop(
                 hd_art,
                 machine,
                 state.ppu_stale,
+                state.touch.stretches_picture(),
             );
             match &result {
                 Ok((png, state)) => log::info!(
@@ -2852,6 +2859,7 @@ fn windowed_loop(
 /// the game views and the HD layer, drawn as the window draws them, at the window's size in pixels), or the PPU's own
 /// frame (`Frame`). Writes the machine's state beside it, named the same, so the picture can be played back with
 /// `xtask shots --state-in`. Returns the two paths.
+#[allow(clippy::too_many_arguments)]
 fn take_screenshot(
     kind: screenshot::Kind,
     video: &mut video::Video,
@@ -2860,11 +2868,12 @@ fn take_screenshot(
     mut art: Option<&mut hd::Art>,
     machine: &Machine,
     ppu_stale: bool,
+    stretch: bool,
 ) -> std::io::Result<(PathBuf, PathBuf)> {
     let (width, height, rgba) = match kind {
         screenshot::Kind::Window => video
             .capture(views, |ui, games| {
-                ui::draw_game(ui, games, frame_layer(scene, overlay, art.as_deref_mut()));
+                ui::draw_game(ui, games, frame_layer(scene, overlay, art.as_deref_mut()), stretch);
             })
             .map_err(std::io::Error::other)?,
         screenshot::Kind::Frame => original_frame(machine, ppu_stale),
@@ -3053,14 +3062,15 @@ fn draw_snapshot(
         Some(picture) => GameView::enhanced(picture, &machine.frame(), state.video.linear()),
         None => GameView::classic(&wide),
     };
-    let views = [filter::shape(views, state.video.shape(), &mut shape_buffer)];
+    let shape = state.video.shape();
+    let views = [filter::shape(views, shape, &mut shape_buffer)];
     let mut actions = Vec::new();
     let scene = state.hd.as_ref().and_then(|hd| hd.scene(machine.wram()));
     let overlay = state.hd.as_ref().and_then(|hd| hd.overlay(machine.wram(), machine.sram()));
     let (scene, overlay) = with_quit_confirm(&state, scene, overlay);
     let mut plain_art = hd::Art::empty();
     let asking = state.quit_confirm.is_some();
-    let mut hd_art = state.hd.as_mut().map(Hd::art);
+    let mut hd_art = state.hd.as_mut().map(|hd| hd.art(shape));
     if hd_art.is_none() && asking {
         hd_art = Some(&mut plain_art);
     }

@@ -99,7 +99,8 @@ pub fn headline(words: Option<&UiText>, headline: Headline) -> String {
 }
 
 /// A label and its value on one line: a label that ends in a full-width colon takes no space after it.
-fn labelled(words: Option<&UiText>, label: &str, value: &str) -> String {
+#[must_use]
+pub fn labelled(words: Option<&UiText>, label: &str, value: &str) -> String {
     let label = tr(words, label);
     if label.ends_with('：') { format!("{label}{value}") } else { format!("{label} {value}") }
 }

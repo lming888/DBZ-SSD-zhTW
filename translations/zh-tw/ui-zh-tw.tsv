@@ -76,7 +76,7 @@ This file is too big to be a data pack.	這個檔案太大，不可能是資料�
 PLA.	速度
 KI-USE	ＫＩ消耗
 
-# 668 rows are first-pass translations and may be revised.
+# 679 rows are first-pass translations and may be revised.
 Talk to the person ahead.	和前面的人交談。
 Search the ground nearby.	調查附近的地面。
 Take off and fly the map.	起飛，在地圖上飛行。
@@ -745,3 +745,14 @@ opening the game's window and graphics	開啟遊戲畫面與繪圖
 opening the sound	開啟音效
 drawing the first picture	畫出第一個畫面
 an unknown step	不明的步驟
+Exit reason:	結束原因：
+Seconds from start to exit:	從啟動到結束的秒數：
+The game ran, but no picture reached the screen.	遊戲有在執行，但沒有任何畫面送到螢幕上。
+a crash in native code	原生程式崩潰
+a crash	程式崩潰
+no response (ANR)	沒有回應（ANR）
+killed by a signal	被訊號終止
+failed to start	無法啟動
+ended by the user or the system	由使用者或系統結束
+The game stopped before its first picture.	遊戲在畫出第一個畫面之前停住了。
+Seconds in the foreground with no picture:	沒有畫面時在前景停留的秒數：

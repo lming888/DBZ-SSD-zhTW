@@ -13,6 +13,9 @@ mod hotkeys;
 mod input;
 mod lang;
 mod language_pick;
+// How the last Android process ended (the system's ApplicationExitInfo, android_report.rs); tested on the host.
+#[cfg(any(target_os = "android", test))]
+mod exit_info;
 // The graphics backend of an Android start, from what the last start left (android_report.rs); tested on the host.
 #[cfg(any(target_os = "android", test))]
 mod launch_guard;

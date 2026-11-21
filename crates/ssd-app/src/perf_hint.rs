@@ -165,7 +165,14 @@ mod android {
             // SAFETY: `tids` holds `len` thread ids of this process, and it lives across the call.
             let session =
                 unsafe { (api.create_session)(manager, tids.as_ptr(), tids.len(), target_ns) };
-            (!session.is_null()).then_some(Self { session, api })
+            // A refused session is null. No `Live` may be made of it, not even one that is dropped at once (as
+            // `bool::then_some` would make): `Drop` would close a null session, and
+            // `APerformanceHint_closeSession` aborts the process on one ("session is nullptr").
+            if session.is_null() {
+                log::info!("the system refused a Performance Hint session: the frames are not reported");
+                return None;
+            }
+            Some(Self { session, api })
         }
 
         /// Sets the target work duration of the session, in nanoseconds.
@@ -183,6 +190,10 @@ mod android {
 
     impl Drop for Live {
         fn drop(&mut self) {
+            // `open` never keeps a null session; closing one aborts the process, so it is checked here too.
+            if self.session.is_null() {
+                return;
+            }
             // SAFETY: the session was made by `open` and is closed once, here.
             unsafe { (self.api.close_session)(self.session) };
         }

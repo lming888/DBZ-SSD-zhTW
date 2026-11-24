@@ -11,8 +11,8 @@ python3 tools/regress45/run.py --inputs <放 ROM 與輸入錄影的資料夾>
 ```
 
 - `--inputs DIR`（或環境變數 `DBZ_REGRESS_INPUTS`）：輸入資料夾，從裡面取
-  `en.sfc`（英文版 ROM）、`pc039/hd/A8CF4F2A/1`（已安裝的 HD 美術包資料夾）、`saves/`（grav、nail-porunga 存檔）、
-  `secrets/replays/`（劇情錄影）。也可以分別指定：`--rom`、`--pack`、`--saves`、`--replays`
+  `en.sfc`（英文版 ROM）、`pc039/hd/A8CF4F2A/1`（已安裝的 HD 美術包資料夾）、`saves/`（grav、grav-piccolo、nail-porunga 存檔；grav-piccolo 是 `xtask save-edit repro_base.srm grav-piccolo.sav --set party=piccolo --set map=21`，基底要用 `repro_base.srm`：探針的幀範圍是照這個基底量的；正式劇情裡太空船只有悟空，這個存檔是測機制用的）、
+  `secrets/replays/`（劇情錄影；`tools/saves/secrets.sh` 產生，界王星重力試煉的兩支是 `king-kai-gravity-piccolo`、`king-kai-gravity-goku`）。也可以分別指定：`--rom`、`--pack`、`--saves`、`--replays`
   （環境變數 `DBZ_ROM`、`DBZ_HD_PACK`、`DBZ_SAVES`、`DBZ_REPLAYS`）。這些檔案都不進 repo，需要自備。
 - `-k 字串`：只跑名字含這個字串的場景（可重複），例如 `-k porunga`。
 - `-j N`：同時跑幾個掃描（預設 4；每個掃描是 2～4 支 shots 行程）。

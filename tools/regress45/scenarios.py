@@ -171,6 +171,19 @@ RUNS = {
     'mg_grav': dict(script='scenes/minigames/grav_a.txt', sram='grav', lo=2150, hi=3300, wram=GRAV),
     # (the gravity training's choice, `str3:0x46`: the game writes the level into its third line, `GRAVITY_CHOICE`)
     'mg_grav_choice': dict(script='scenes/minigames/grav_a.txt', sram='grav', lo=4040, hi=4700, wram=GRAV),
+    # ---- v51: the gravity training names whoever trains (the English pages battle:162 and battle:165 have no name
+    # slot; the game writes the trainee into slot 1 before battle:162 and into slot 2 before battle:165). The controls
+    # write the trainee's name out, so the page must draw the same as the control.
+    # (the gravity room with Piccolo: saves/grav-piccolo.sav, `save-edit --set party=piccolo --set map=21`)
+    'mg_grav_piccolo': dict(script='scenes/minigames/grav_a.txt', sram='grav-piccolo', lo=5540, hi=5700, wram=GRAV,
+                            controls={'piccolo_written': {'set': {'battle:165': '比克\\n被重力重重\\n壓住了！{auto}'}}}),
+    # (King Kai's gravity trial: tools/saves/secrets.sh king-kai-gravity-piccolo, map 1; king-kai-gravity-goku, map 7)
+    'kk_gravity_piccolo': dict(script='replay:secret-king-kai-gravity-piccolo', lo=3240, hi=3940,
+                               controls={'piccolo_written': {'set': {
+                                   'battle:162': '「比克，\\n要在{num:1}回合內\\n突破重力！」',
+                                   'battle:165': '比克\\n被重力重重\\n壓住了！{auto}'}}}),
+    'kk_gravity_goku': dict(script='replay:secret-king-kai-gravity-goku', lo=3420, hi=3520,
+                            controls={'goku_written': {'set': {'battle:162': '「悟空，\\n要在{num:1}回合內\\n突破重力！」'}}}),
     # ---- intro, title, continue
     'ti_intro': dict(script='scenes/title_intro_ending/idle.txt', lo=3600, hi=4960),
     'ti_continue': dict(script='scenes/title_intro_ending/continue.txt', sram='nail-porunga', lo=1500, hi=2700),
@@ -650,6 +663,19 @@ SCENARIOS = [
     sc('mg_guard_grav', 'mg_grav', 'guard', 'minigames',
        '重力室開場與修業：目前乾淨（換頁早清那 6 幀除外）',
        [no(CLEAN)]),
+    sc('mg_grav_piccolo_165', 'mg_grav_piccolo', 'fixed', 'minigames',
+       '比克在太空船重力室受訓時，battle:165 寫「比克被重力重重壓住了！」（v1.0 寫死「悟空」；插槽 2＝0x8001）',
+       [probe('grav_165_piccolo', 'equal', (160, 350, 590, 460), (5596, 5636), a='zh', b='piccolo_written')],
+       severity='medium'),
+    sc('kk_gravity_piccolo_names', 'kk_gravity_piccolo', 'fixed', 'minigames',
+       '比克在界王星（map 1）重力試煉：battle:162「「比克，要在10回合內突破重力！」」、battle:165「比克被重力…」'
+       '（v1.0 兩頁都寫死「悟空」，Ming 2026-11-23 實玩回報；插槽 1／2＝0x8001）',
+       [probe('kk_162_piccolo', 'equal', (160, 350, 590, 460), (3296, 3324), a='zh', b='piccolo_written'),
+        probe('kk_165_piccolo', 'equal', (160, 350, 590, 460), (3868, 3928), a='zh', b='piccolo_written')],
+       severity='medium'),
+    sc('kk_guard_gravity_goku_162', 'kk_gravity_goku', 'guard', 'minigames',
+       '悟空在界王星（map 7）重力試煉：battle:162 照樣是「「悟空，要在10回合內突破重力！」」（插槽 1＝0x8000）',
+       [probe('kk_162_goku', 'equal', (160, 350, 590, 460), (3472, 3500), a='zh', b='goku_written')]),
 
     # ======================================================== intro, title, continue
     sc('ti_intro_last_line_sliver', 'ti_intro', 'fixed', 'title_intro_ending',

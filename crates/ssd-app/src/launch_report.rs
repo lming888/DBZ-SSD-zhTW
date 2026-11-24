@@ -10,7 +10,7 @@ pub const ISSUES_URL: &str = "https://github.com/lming888/DBZ-SSD-zhTW/issues";
 /// What the report says of the device and the build; an empty text is "not known".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Facts {
-    /// The APK's version name and code, `v1.0 (29)`.
+    /// The APK's version name and code, `v1.0.1 (30)`.
     pub version: String,
     pub manufacturer: String,
     pub model: String,
@@ -254,7 +254,7 @@ mod tests {
 
     fn facts() -> Facts {
         Facts {
-            version: "v1.0 (29)".to_owned(),
+            version: "v1.0.1 (30)".to_owned(),
             manufacturer: "Sony".to_owned(),
             model: "G8441".to_owned(),
             android: "9".to_owned(),
@@ -276,7 +276,7 @@ mod tests {
         );
         for part in [
             "The game stopped because of an error.",
-            "Version: v1.0 (29)",
+            "Version: v1.0.1 (30)",
             "Device: Sony G8441",
             "Android: 9 (API 28)",
             "Chip: msm8998",
@@ -308,7 +308,7 @@ mod tests {
         let lead = [headline(Some(&table), Headline::CouldNotStart)];
         let text = report(Some(&table), &lead, &facts(), &["error: x".to_owned()]);
         for part in [
-            "版本：v1.0 (29)",
+            "版本：v1.0.1 (30)",
             "裝置：Sony G8441",
             "Android：9 (API 28)",
             "記憶體：3712 MB",

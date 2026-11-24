@@ -414,14 +414,15 @@ impl Player {
                             self.advance();
                         }
                     } else if waited >= SETTLE_FRAMES {
-                        // A press on an Item sheet that the original did not take (it takes one only
+                        // A press on a command or Item sheet that the original did not take (it takes one only
                         // some of the time, just after its window is drawn) is repeated: no state
                         // changed, so the repeat is the same press.
                         match self.steps[self.index] {
                             Step::Press {
                                 button,
                                 until:
-                                    again @ (Until::ItemChoice
+                                    again @ (Until::Taken
+                                    | Until::ItemChoice
                                     | Until::ItemReply
                                     | Until::UseTaken
                                     | Until::ItemStep(_)
@@ -776,5 +777,76 @@ mod tests {
         let (pads, outcome) = run(Vec::new(), &mut menu, 3);
         assert_eq!(pads, Vec::<Joypad>::new());
         assert_eq!(outcome, Some(Outcome::Reached));
+    }
+
+    #[test]
+    fn a_dropped_command_press_is_retried_before_aborting() {
+        let mut menu = open_menu();
+        let labels = ssd_menus::Labels::default();
+        let mut player = Player::new(vec![Step::Press { button: Button::A, until: Until::Taken }]);
+        let mut a_presses = 0;
+        let mut prev_a = false;
+        let mut outcome = None;
+        for _ in 0..400 {
+            let wram = menu.wram();
+            let probe = MenuProbe::new(&wram, &labels);
+            match player.next(&probe) {
+                Next::Frame(pad) => {
+                    if pad.a && !prev_a {
+                        a_presses += 1;
+                    }
+                    prev_a = pad.a;
+                    // Ignore the first A press (as right after window draw); accept the retry.
+                    if a_presses == 1 && pad.a {
+                        menu.tick(Joypad::default());
+                    } else {
+                        menu.tick(pad);
+                    }
+                }
+                Next::Done(done) => {
+                    outcome = Some(done);
+                    break;
+                }
+                Next::Stage(_) | Next::Lift => {}
+            }
+        }
+        assert_eq!(a_presses, 2, "retried once after the first A was dropped");
+        assert_eq!(outcome, Some(Outcome::Reached));
+        assert!(menu.message, "Talk dialogue opened instead of closing the menu");
+    }
+
+    #[test]
+    fn a_command_press_that_is_never_taken_aborts_after_retries() {
+        let mut menu = open_menu();
+        let labels = ssd_menus::Labels::default();
+        let mut player = Player::new(vec![Step::Press { button: Button::A, until: Until::Taken }]);
+        let mut a_presses = 0;
+        let mut prev_a = false;
+        let mut outcome = None;
+        for _ in 0..1_500 {
+            let wram = menu.wram();
+            let probe = MenuProbe::new(&wram, &labels);
+            match player.next(&probe) {
+                Next::Frame(pad) => {
+                    if pad.a && !prev_a {
+                        a_presses += 1;
+                    }
+                    prev_a = pad.a;
+                    // Never forward A, only B so Closing can exit the menu.
+                    menu.tick(Joypad { b: pad.b, ..Joypad::default() });
+                }
+                Next::Done(done) => {
+                    outcome = Some(done);
+                    break;
+                }
+                Next::Stage(_) | Next::Lift => {}
+            }
+        }
+        assert_eq!(a_presses, usize::from(PRESS_RETRIES) + 1);
+        assert_eq!(
+            outcome,
+            Some(Outcome::Aborted { reason: "a press did not reach the state it should" })
+        );
+        assert_eq!(menu.field, 0, "the menu closed cleanly after exhausting retries");
     }
 }

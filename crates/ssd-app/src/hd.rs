@@ -698,6 +698,11 @@ impl Hd {
         self.art.backdrop_shape = shape;
         &mut self.art
     }
+
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        tests::presentation_hd()
+    }
 }
 
 /// The frame the menu opens over: the Enhanced picture it was drawn as (kept by reference, not copied), or the
@@ -1412,7 +1417,7 @@ mod tests {
     use super::*;
     use ssd_menus::Style;
 
-    fn presentation_hd() -> Hd {
+    pub(super) fn presentation_hd() -> Hd {
         let rom = crate::test_support::sram_counter_rom();
         let labels = ssd_menus::Labels::default();
         Hd {

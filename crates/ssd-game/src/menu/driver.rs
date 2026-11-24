@@ -188,6 +188,9 @@ struct State {
     travel_lifted: bool,
     /// Frames after `field_free()` turns true during which NMI finishes clearing BG1/BG3 tilemaps.
     travel_tail: u8,
+    /// Confirm/Cancel held by the player when a plan finished, masked until released so it does not leak to the game.
+    swallow_a: bool,
+    swallow_b: bool,
 }
 
 /// The frames a second the video question counts its ten seconds in (the console's rate, which the host paces to).
@@ -256,6 +259,8 @@ impl Driver {
                 order: OrderNav::default(),
                 travel_lifted: false,
                 travel_tail: 0,
+                swallow_a: false,
+                swallow_b: false,
             },
         }
     }
@@ -491,6 +496,8 @@ impl Driver {
             order: OrderNav::default(),
             travel_lifted: false,
             travel_tail: 0,
+            swallow_a: false,
+            swallow_b: false,
         };
     }
 
@@ -1299,6 +1306,10 @@ impl State {
                         self.running = None;
                         self.last = Some(outcome);
                         self.arrive(arrival, outcome);
+                        if self.curtain != Curtain::Up {
+                            self.swallow_a = live.a;
+                            self.swallow_b = live.b;
+                        }
                         break;
                     }
                 }
@@ -1306,12 +1317,28 @@ impl State {
         }
         match self.curtain {
             Curtain::Up => {
+                self.swallow_a = false;
+                self.swallow_b = false;
                 self.auto_run = AutoRun::default();
                 Joypad::default()
             }
             Curtain::Down | Curtain::Lifted => {
                 // A finished message that waits for A: the host presses it after the Gameplay page's wait.
                 let mut pad = live;
+                if self.swallow_a {
+                    if pad.a {
+                        pad.a = false;
+                    } else {
+                        self.swallow_a = false;
+                    }
+                }
+                if self.swallow_b {
+                    if pad.b {
+                        pad.b = false;
+                    } else {
+                        self.swallow_b = false;
+                    }
+                }
                 self.auto_run.apply(wram, &self.options.game, &mut pad);
                 pad
             }
@@ -3906,5 +3933,32 @@ mod tests {
         assert!(mods_texts(&driver, &menu).iter().any(|text| text == "mods.toml cannot be read."));
         driver.key(Key::Down, &menu.wram());
         assert!(!mods_texts(&driver, &menu).iter().any(|text| text == "mods.toml cannot be read."));
+    }
+
+    #[test]
+    fn holding_a_when_choosing_talk_does_not_leak_a_second_a_into_the_dialogue() {
+        let mut driver = Driver::new(Labels::default());
+        let mut menu = FakeMenu::default();
+        open_by_player(&mut driver, &mut menu);
+
+        let held_a = Joypad { a: true, ..Joypad::default() };
+        driver.key(Key::Confirm, &menu.wram());
+
+        // Simulate the player keeping A held while the Talk plan completes and on the next frames.
+        for _ in 0..20 {
+            let out = frame(&mut driver, &mut menu, held_a);
+            if !driver.busy() {
+                assert!(!out.a, "held confirm button must not leak as a fresh A press");
+            }
+        }
+        assert_eq!(driver.curtain(), Curtain::Lifted);
+        assert!(menu.message, "the Talk dialogue stays open while A remains held");
+
+        // Releasing A clears the mask; a fresh A press afterwards dismisses the dialogue.
+        frame(&mut driver, &mut menu, Joypad::default());
+        let out = frame(&mut driver, &mut menu, held_a);
+        assert!(out.a, "a fresh press after release reaches the dialogue");
+        frame(&mut driver, &mut menu, Joypad::default());
+        assert_eq!(driver.curtain(), Curtain::Down, "the fresh A closed the dialogue");
     }
 }

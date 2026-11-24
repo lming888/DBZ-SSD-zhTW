@@ -9,7 +9,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # .cargo/config.toml points CMAKE at a Windows path; an environment value wins over it.
 export CMAKE="${CMAKE_ANDROID:-$(command -v cmake)}"
-# The APK's version and code from android/app/build.gradle (`v1.0 (29)`), named in the report a failed start shows
+# The APK's version and code from android/app/build.gradle (`v1.0.1 (30)`), named in the report a failed start shows
 # (crates/ssd-app/src/android_report.rs).
 export SSD_APK_VERSION="$(sed -n "s/^ *versionName '\(.*\)'.*/\1/p" android/app/build.gradle) ($(sed -n 's/^ *versionCode \([0-9]*\).*/\1/p' android/app/build.gradle))"
 profile=debug; cargo_profile=(); gradle_task=assembleDebug

@@ -166,6 +166,10 @@ These read or write the three fields but decide nothing in the story. Listed so 
 
 All hooks are `Patch` hooks (`HookMode::Patch`): they cost nothing, never call the original, and decline at once, with `resume_at`
 their own key, when the feature's slot is not in the image. Widths are the accumulator's at the instruction ("M8": 8-bit).
+The exception is the two hooks of Piccolo's return: without the feature they carry a story fix of the Enhanced mode, which gives a
+level above the table (41 to 48) the table's rule, the BP his level table adds up to less 2 033 (500 000 at 41), and keeps his BP
+at any other level outside 33 to 40 (32 or lower, 49 or higher); the table's levels stay the original's. The Classic game has
+no hooks and keeps the original's read past the table.
 
 | Hook | Key | Instruction it stands for | Width | What it does | Ends with |
 |---|---|---|---|---|---|
@@ -186,7 +190,8 @@ Keys are the recompiler's stops too (`xtask recompile` must run again before a r
 
 The ROM-gated test `crates/ssd-game/tests/free_progression_real_rom.rs` runs each gate in the game's own code, staged through a
 `JSL` written at `$7F:FE00`, in three worlds: the plain machine, the machine with the redirectors and no pack (it must give the
-plain numbers), and the machine of the example pack `examples/free-progression`:
+plain numbers, except Piccolo's return at a level outside 33 to 40, which the Enhanced mode's story fix changes), and the machine
+of the example pack `examples/free-progression`:
 `SSD_ROM_PATH=... cargo test -p ssd-game --release --test free_progression_real_rom -- --ignored --nocapture --test-threads=1`.
 
 Headless runs on crafted saves (`xtask save-edit` on the saves of `tools/saves/secrets.sh`, `replay-from-save` with the named timeline,
@@ -203,3 +208,7 @@ plays all of them and prints what the story did (about five minutes):
 | S6 | `secret-ginyu-jeice-burter`, `image:02=0A` (Goku's roster level 10), a quiet map 16 (`flags=none,+1,+3,+7,+0x1F,+0x22`), `--wram 2500:7E0024=86` (mode 6: the set-up runs) | `$0172 = 01` | `$0172 = 04` |
 | S7 | `secret-piccolo-returns`, `piccolo.level=25` (and 45), `frieza-flees` | BP 9 374 473 (41 475 at 45) in record 0 after scene `$38` | 11 853 (1 010 033 at 45) |
 | S7 control | the same at level 40 | 210 000 | 210 000 |
+
+"Without the pack" above is the machine of `xtask shots` with no `--app-hooks`, which installs no story fix: for S7 it is the
+Classic game. The Enhanced mode without the pack (`--app-hooks`) keeps his BP at level 25 and gives the table's rule above the table
+(500 000 at 41); `piccolos_return_without_the_pack_gives_a_level_above_the_table_the_tables_rule` in the same test file runs it.

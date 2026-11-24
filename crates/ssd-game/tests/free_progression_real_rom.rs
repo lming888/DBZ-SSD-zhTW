@@ -239,6 +239,12 @@ impl Rigs {
         let pack = case(&mut self.pack);
         (plain, pack)
     }
+
+    /// Runs `case` in the three worlds and returns what each read, `(plain, no_pack, pack)`, for a case where the machine with
+    /// no pack (the Enhanced mode's default) is meant to differ from the plain machine: a story fix of the redirectors.
+    fn each<T>(&mut self, case: impl Fn(&mut Rig) -> T) -> (T, T, T) {
+        (case(&mut self.plain), case(&mut self.no_pack), case(&mut self.pack))
+    }
 }
 
 /// The map 0 routine (`03:F212`, the Raditz check) with Goku and Piccolo at the given levels, flag 3 set (the Gohan card), the
@@ -571,8 +577,10 @@ fn piccolos_return_keeps_his_bp_at_a_level_the_table_does_not_hold() {
             "level {level}: the feature leaves a level of the table alone"
         );
     }
+    // Outside the table the machine with no pack has the story fix of the Enhanced mode (see the next test): only the plain
+    // machine is the original's there.
     for level in [1_u8, 13, 20, 32, 41, 44, 47, 48, 60] {
-        let (plain, pack) = rigs.run(&format!("level {level}"), |rig| piccolo_returns(rig, level));
+        let (plain, _, pack) = rigs.each(|rig| piccolo_returns(rig, level));
         assert_ne!(
             plain, 123_456,
             "level {level}: the original assigns a BP it read past the table ({plain})"
@@ -584,6 +592,66 @@ fn piccolos_return_keeps_his_bp_at_a_level_the_table_does_not_hold() {
     rigs.pack.assert_contracts();
     println!(
         "effect 35: the table's levels 33 to 40 as the original, any other level keeps the BP"
+    );
+}
+
+/// The BP Piccolo's level table (`02:C13B`, his pointer the third word; 11-byte rows, the BP gained at `+0..2`) adds up to at
+/// `level`, from the row of level 1 (his starting BP).
+fn piccolo_cumulative_bp(rom: &[u8], level: u8) -> u32 {
+    let file = |bank: usize, address: usize| bank * 0x8000 + (address - 0x8000);
+    let pointer_at = file(2, 0xC13B) + 2 * usize::from(PICCOLO);
+    let rows = file(2, usize::from(rom[pointer_at]) | usize::from(rom[pointer_at + 1]) << 8);
+    (0..usize::from(level))
+        .map(|row| {
+            let at = rows + 11 * row;
+            u32::from(rom[at]) | u32::from(rom[at + 1]) << 8 | u32::from(rom[at + 2]) << 16
+        })
+        .sum()
+}
+
+/// The Enhanced mode's story fix of Piccolo's return (effect `$35`), without the pack: the original reads its BP table only for
+/// the levels 33 to 40 and past it for any other (9 241 001 at level 41, the bytes of the code after the table). The fix gives a
+/// level above the table (41 to 48) what the table's rule gives (the BP his level table adds up to, less 2 033: each of the eight
+/// entries is that) and lets a level below it (or past 48) keep the BP he had. The table's levels stay the original's.
+#[test]
+#[ignore = "needs the ROM (SSD_ROM_PATH)"]
+fn piccolos_return_without_the_pack_gives_a_level_above_the_table_the_tables_rule() {
+    let rom = rom();
+    let rule = |level: u8| piccolo_cumulative_bp(&rom, level) - 2_033;
+    let mut rigs = Rigs::new();
+    // The table's own levels: the original's numbers in the three worlds, and the rule gives them too.
+    for (level, table) in [(33_u8, 170_000), (40, 210_000)] {
+        let (plain, no_pack, pack) = rigs.each(|rig| piccolo_returns(rig, level));
+        assert_eq!((plain, no_pack, pack), (table, table, table), "level {level}");
+        assert_eq!(rule(level), table, "level {level}: the rule is the table's");
+    }
+    // Above the table: the rule's number, not the bytes past the table.
+    let (plain, no_pack, pack) = rigs.each(|rig| piccolo_returns(rig, 41));
+    assert_eq!(plain, 9_241_001, "level 41: the original reads the code after its table");
+    assert_eq!(no_pack, 500_000, "level 41: the fix gives the table's rule");
+    assert_eq!(pack, 123_456, "level 41: free_progression keeps his BP");
+    for (level, wanted) in [(42_u8, 870_000), (47, 1_017_000), (48, 2_917_000)] {
+        let (plain, no_pack, pack) = rigs.each(|rig| piccolo_returns(rig, level));
+        assert_eq!(rule(level), wanted, "level {level}: the rule from the ROM's level table");
+        assert_eq!(
+            no_pack, wanted,
+            "level {level}: the fix gives the table's rule (plain {plain})"
+        );
+        assert_eq!(pack, 123_456, "level {level}: free_progression keeps his BP");
+    }
+    // Below the table, and past the level table's 48 rows: the BP he had before the return.
+    for level in [1_u8, 9, 13, 32, 49, 60] {
+        let (plain, no_pack, pack) = rigs.each(|rig| piccolo_returns(rig, level));
+        assert_ne!(plain, 123_456, "level {level}: the original reads past its table ({plain})");
+        assert_eq!(no_pack, 123_456, "level {level}: the fix keeps his BP ({no_pack})");
+        assert_eq!(pack, 123_456, "level {level}: free_progression keeps his BP");
+    }
+    assert!(rigs.no_pack.calls_of("mod_fp_piccolo_bp_low") > 0);
+    assert!(rigs.no_pack.calls_of("mod_fp_piccolo_bp_high") > 0);
+    rigs.no_pack.assert_contracts();
+    rigs.pack.assert_contracts();
+    println!(
+        "effect 35 without the pack: 33 to 40 the table, 41 to 48 the table's rule, any other level keeps the BP"
     );
 }
 

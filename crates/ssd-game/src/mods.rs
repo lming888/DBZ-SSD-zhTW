@@ -97,7 +97,8 @@ pub fn hook_entries() -> Vec<HookEntry> {
     entries.extend(bp_kaioken::hook_entries());
     // The chapter wrappers (`chapter`): the two endings, which mark the game completed.
     entries.extend(chapter::hook_entries());
-    // The named features of the packs (`features`): each declines when its slot is not in the image.
+    // The named features of the packs (`features`): each declines when its slot is not in the image, except the two hooks of
+    // Piccolo's return, which carry the Enhanced mode's story fix without the pack as well (`progression`).
     entries.extend(features::hook_entries());
     entries
 }

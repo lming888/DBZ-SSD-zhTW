@@ -146,3 +146,10 @@ make piccolo-snake-way talk-piccolo party=gohan gohan.level=30 map=3 flags=none,
 # King Kai's planet (map 7): Goku (flag 0) walks about, talks to King Kai from above, fights him (Goku at
 # level 40 wins), Shenron brings him back and the Earth chapter begins.
 make king-kai-planet talk-king-kai party=goku goku.level=40 map=7 flags=none,+0 leader=128,60 follower=128,60 scene=0
+# King Kai's gravity trial (v51, tools/regress45 kk_gravity_*): the same talk with no story flag starts the trial
+# instead of the fight, read slowly. Map 1 is Piccolo's stay (the scene writes Piccolo, unit 0x8001, into name slot 1
+# before battle:162), map 7 Goku's (0x8000).
+make king-kai-gravity-piccolo talk-king-kai-slow party=piccolo piccolo.level=20 map=1 flags=none leader=128,60 \
+    follower=128,60 scene=0
+make king-kai-gravity-goku talk-king-kai-slow party=goku goku.level=20 map=7 flags=none leader=128,60 \
+    follower=128,60 scene=0

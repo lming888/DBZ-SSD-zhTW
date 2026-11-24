@@ -1,7 +1,8 @@
 //! The feature `free_progression` (`ssd_mod::feature::FREE_PROGRESSION`): the story moves on events, not on the level of the party.
 //! The gates are listed, with what each one gates and why it is replaced or kept, in `docs/re/data/free-progression.md`; the
 //! hooks here are the replacements. Every hook is a `Patch` that reads the feature's slot of `Family::Feature` and declines at
-//! once (`resume_at` its own key) when the slot is not in the image, so a run without the pack is the original's.
+//! once (`resume_at` its own key) when the slot is not in the image, so a run without the pack is the original's. One exception:
+//! the two hooks of Piccolo's return carry a story fix of the Enhanced mode as well, which acts without the pack (see below).
 //!
 //! How a level compare is replaced: the story loads a party member's level into A and compares it with a constant. A hook on the
 //! load (or on the compare that follows it) puts into A the number that makes the compare come out as the story's event says,
@@ -21,7 +22,10 @@
 //!   of three flags (`0x10` to `0x12`), his arrival during the first fight, the second or the last. The feature gives the arrival
 //!   its parameter says (`ginyu_arrival`: 1 to 3; 0 is the original's rule).
 //! - **Piccolo's return** (`03:C59C`, `03:C5A7`, in effect `$35`): the original gives Piccolo the BP of a table indexed by his level
-//!   minus 33, which holds the levels 33 to 40 only. At another level the feature leaves his BP as it is.
+//!   minus 33, which holds the levels 33 to 40 only. At another level the feature leaves his BP as it is. Without the feature
+//!   the Enhanced mode fixes the original's read past the table (9 241 001 at level 41, the bytes of the code after it): a level
+//!   above the table (41 to 48) gets the table's rule, the BP his level table adds up to less 2 033 (500 000 at 41), and any
+//!   other level outside it keeps his BP, as with the feature. The table's levels stay the original's in both.
 //!
 //! What the feature leaves as the original has it, and why, is in the same note: the floors and gifts only raise a level, Dende's
 //! healing at level 3 and Gohan's rage at level 11 are abilities of a fighter and the Auto choice and the counter-attack compare the
@@ -75,6 +79,16 @@ const RECORD_LEVEL: u32 = 2;
 const RECORD_BP: u32 = 7;
 /// The levels the BP table holds: from 33, eight entries.
 const PICCOLO_TABLE_LEVELS: std::ops::RangeInclusive<u8> = 33..=40;
+/// The levels above the table that Piccolo's level table has a row for (to its 48th): the story fix gives them the table's rule.
+const PICCOLO_RULE_LEVELS: std::ops::RangeInclusive<u8> = 41..=48;
+/// The table's rule: each of its eight entries (170 000 to 210 000) is the BP Piccolo's level table adds up to at that level, less
+/// this (the level table's BP at 33 is 172 033).
+const PICCOLO_RULE_LESS: u32 = 2_033;
+/// Piccolo's character id: his level table's pointer is the third word of `02:C13B`.
+const PICCOLO_ID: u32 = 2;
+/// `02:C13B`: a word per character, the pointer of its level table in bank 2; 11-byte rows, the BP the level gives at `+0..2`.
+const LEVEL_POINTERS: u32 = 0x02_C13B;
+const LEVEL_ROW_LEN: u32 = 11;
 
 /// The parameter of the feature in the image (`ginyu_arrival`), or `None` when the pack does not enable it. A slot with a
 /// `level_cap` begins with [`LEVEL_CAP_SET`], then the arrival, then the cap as two bytes.
@@ -128,6 +142,42 @@ fn ginyu_level(arrival: u8) -> Option<u8> {
 #[must_use]
 fn piccolo_table_has(level: u8) -> bool {
     PICCOLO_TABLE_LEVELS.contains(&level)
+}
+
+/// What effect `$35` gives Piccolo's BP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PiccoloReturn {
+    /// The original's entry of the table (33 to 40).
+    Table,
+    /// The table's rule ([`piccolo_rule_bp`]): the Enhanced mode's story fix, for a level above the table without the feature.
+    Rule,
+    /// The BP he had: `free_progression` at any level outside the table, the story fix below the table or past 48.
+    Keep,
+}
+
+/// What effect `$35` gives Piccolo at `level`, with `free_progression` in the image or not.
+#[must_use]
+fn piccolo_return(feature: bool, level: u8) -> PiccoloReturn {
+    if piccolo_table_has(level) {
+        PiccoloReturn::Table
+    } else if !feature && PICCOLO_RULE_LEVELS.contains(&level) {
+        PiccoloReturn::Rule
+    } else {
+        PiccoloReturn::Keep
+    }
+}
+
+/// The table's rule at `level` (41 to 48): the BP Piccolo's level table (the game's, in the ROM) adds up to from the row of
+/// level 1 (his starting BP) to the row of `level`, less [`PICCOLO_RULE_LESS`]. 500 000 at 41, 1 017 000 at 47.
+fn piccolo_rule_bp(ctx: &Ctx<'_>, level: u8) -> u32 {
+    let rows = 0x02_0000 | u32::from(ctx.peek16(LEVEL_POINTERS + 2 * PICCOLO_ID));
+    let total: u32 = (0..u32::from(level))
+        .map(|row| {
+            let at = rows + LEVEL_ROW_LEN * row;
+            u32::from(ctx.peek16(at)) | u32::from(ctx.peek8(at + 2)) << 16
+        })
+        .sum();
+    total - PICCOLO_RULE_LESS
 }
 
 /// The load of a level in the Raditz routine: with Goku (or Piccolo) found in the party (carry clear after `03:F021`), A gets the
@@ -205,34 +255,37 @@ fn ginyu_arrival(ctx: &mut Ctx<'_>) {
     ctx.resume_at(GINYU_KEY);
 }
 
-/// Whether effect `$35` is given a level its BP table does not hold (the first record's level, Piccolo's).
-fn piccolo_out_of_table(ctx: &Ctx<'_>) -> bool {
-    !piccolo_table_has(ctx.peek8(FIRST_RECORD + RECORD_LEVEL))
+/// What effect `$35` gives Piccolo now, and his level (the first record's, Piccolo's).
+fn piccolo_now(ctx: &Ctx<'_>) -> (PiccoloReturn, u8) {
+    let level = ctx.peek8(FIRST_RECORD + RECORD_LEVEL);
+    (piccolo_return(feature(ctx).is_some(), level), level)
 }
 
-/// `03:C59C`, `LDA $03C5BA,X` (the BP's low word, A 16-bit): for a level outside the table A is the record's own BP word, which
-/// the store after it writes back, so the BP stays. The original loads it for a level in the table. Resumes after the load.
+/// `03:C59C`, `LDA $03C5BA,X` (the BP's low word, A 16-bit): for [`PiccoloReturn::Keep`] A is the record's own BP word, which the
+/// store after it writes back, so the BP stays; for [`PiccoloReturn::Rule`] A is the low word of the rule's BP. The original
+/// loads it for a level in the table. Resumes after the load.
 fn piccolo_bp_low(ctx: &mut Ctx<'_>) {
-    if feature(ctx).is_some() && piccolo_out_of_table(ctx) {
-        let word = ctx.read16(FIRST_RECORD + RECORD_BP + u32::from(ctx.y()));
-        ctx.set_a(word);
-        ctx.set_nz16(word);
-        ctx.resume_at(PICCOLO_BP_LOW_KEY + LOAD_LONG_LEN);
-    } else {
-        ctx.resume_at(PICCOLO_BP_LOW_KEY);
-    }
+    let word = match piccolo_now(ctx) {
+        (PiccoloReturn::Table, _) => return ctx.resume_at(PICCOLO_BP_LOW_KEY),
+        (PiccoloReturn::Keep, _) => ctx.read16(FIRST_RECORD + RECORD_BP + u32::from(ctx.y())),
+        (PiccoloReturn::Rule, level) => piccolo_rule_bp(ctx, level) as u16,
+    };
+    ctx.set_a(word);
+    ctx.set_nz16(word);
+    ctx.resume_at(PICCOLO_BP_LOW_KEY + LOAD_LONG_LEN);
 }
 
-/// `03:C5A7`, `LDA $03C5BC,X` (the BP's high byte, A 8-bit, Y two more than at the first load): as [`piccolo_bp_low`].
+/// `03:C5A7`, `LDA $03C5BC,X` (the BP's high byte, A 8-bit, Y two more than at the first load): as [`piccolo_bp_low`], with the
+/// high byte of the rule's BP.
 fn piccolo_bp_high(ctx: &mut Ctx<'_>) {
-    if feature(ctx).is_some() && piccolo_out_of_table(ctx) {
-        let byte = ctx.read8(FIRST_RECORD + RECORD_BP + u32::from(ctx.y()));
-        ctx.set_al(byte);
-        ctx.set_nz8(byte);
-        ctx.resume_at(PICCOLO_BP_HIGH_KEY + LOAD_LONG_LEN);
-    } else {
-        ctx.resume_at(PICCOLO_BP_HIGH_KEY);
-    }
+    let byte = match piccolo_now(ctx) {
+        (PiccoloReturn::Table, _) => return ctx.resume_at(PICCOLO_BP_HIGH_KEY),
+        (PiccoloReturn::Keep, _) => ctx.read8(FIRST_RECORD + RECORD_BP + u32::from(ctx.y())),
+        (PiccoloReturn::Rule, level) => (piccolo_rule_bp(ctx, level) >> 16) as u8,
+    };
+    ctx.set_al(byte);
+    ctx.set_nz8(byte);
+    ctx.resume_at(PICCOLO_BP_HIGH_KEY + LOAD_LONG_LEN);
 }
 
 /// One hook of the feature: a `Patch` at `key`, costing nothing. `m8` is the width of the accumulator the instruction at `key` is
@@ -320,6 +373,24 @@ mod tests {
         for level in 0..=255_u8 {
             assert_eq!(piccolo_table_has(level), (33..=40).contains(&level), "level {level}");
         }
+    }
+
+    #[test]
+    fn piccolos_return_is_the_table_the_rule_above_it_or_his_own_bp() {
+        use PiccoloReturn::{Keep, Rule, Table};
+        for level in 0..=255_u8 {
+            let (without, with) = match level {
+                33..=40 => (Table, Table),
+                41..=48 => (Rule, Keep),
+                _ => (Keep, Keep),
+            };
+            assert_eq!(piccolo_return(false, level), without, "level {level} without the feature");
+            assert_eq!(piccolo_return(true, level), with, "level {level} with the feature");
+        }
+        assert_eq!(
+            PICCOLO_RULE_LESS, 2_033,
+            "each entry of the table is the level table's BP less 2 033"
+        );
     }
 
     #[test]

@@ -131,7 +131,9 @@ What changes:
   arrival): during the fight with Recoome and Guldo, with Jeice and Burter, or at the last fight. The parameter `ginyu_arrival`
   gives the arrival.
 - **Piccolo's return after Porunga.** The original sets his BP from a table of eight values for the levels 33 to 40, and reads
-  a wrong value at any other level. At another level the feature leaves his BP as it is.
+  a wrong value at any other level. At another level the feature leaves his BP as it is. (Without the feature the Enhanced
+  mode fixes the wrong value on its own: levels 41 to 48 get the table's rule extended upward, 500 000 at 41, and any other level
+  outside 33 to 40 keeps his BP. With the feature its own rule above holds at every level outside the table.)
 
 What stays, and why: the **floors and gifts** that raise a level (they never lower one, and never raise more than one level above
 their target), the **caps** (the data pack tables may change them), **Dende's healing** at level 3, **Gohan's rage** at level 11 and

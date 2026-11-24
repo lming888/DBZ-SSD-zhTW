@@ -67,8 +67,6 @@ fn the_zh_tw_pack_writes_out_the_names_its_english_pages_have_no_slot_for() {
     let table = zh_tw();
     // pages whose English page has no name slot at all: the person is written in
     for key in [
-        "battle:162",
-        "battle:165",
         "battle:247",
         "str2:0x09E",
         "str2:0x165",
@@ -87,6 +85,15 @@ fn the_zh_tw_pack_writes_out_the_names_its_english_pages_have_no_slot_for() {
         let key = "battle:286";
         let text = table.text(key).unwrap_or_else(|| panic!("{key} has no text"));
         assert!(text.contains("{name:1}") && !text.contains("{name:2}"), "{key}: {text}");
+    }
+    // the gravity training's trainee (v51), though the English pages have no name slot: battle:162
+    // (King Kai's, not shown in the spaceship) takes slot 1, the one the map's scene names (Goku on
+    // map 7, Piccolo on map 1, even with Goku placed there), and the story brings only that one to
+    // each map; battle:165 takes slot 2, the one who trains. v1.0 wrote Goku out and called Piccolo
+    // Goku on King Kai's planet (in the story the spaceship trains Goku alone)
+    for (key, slot) in [("battle:162", "{name:1}"), ("battle:165", "{name:2}")] {
+        let text = table.text(key).unwrap_or_else(|| panic!("{key} has no text"));
+        assert!(text.contains(slot) && !text.contains("悟空"), "{key}: {text}");
     }
     // pages whose slot changes with the scene (checked against the Japanese ROM): the
     // slot is kept, since the game fills it the same way in both versions

@@ -1566,8 +1566,11 @@ fn window_frames(
         audio.set_settings(AudioSettings::from_values(&hd.driver().options().pc));
     }
     // A choice of the HD menu runs its presses behind the curtain: as many frames as it
-    // takes, in one go, without waiting for the clock or drawing them.
-    let burst = if state.hd.as_ref().is_some_and(hd::Hd::busy) { HD_BURST } else { 1 };
+    // takes, in one go, without waiting for the clock or drawing them. Once the curtain lifts
+    // onto the game's own screen (Talk, Look, Fly, Land, or the Use box), return to paced frames
+    // so audio never bursts or runs dry.
+    let behind_curtain = |hd: &hd::Hd| hd.busy() && hd.driver().curtain() == Curtain::Up;
+    let burst = if state.hd.as_ref().is_some_and(behind_curtain) { HD_BURST } else { 1 };
     let mut frames_run = 0_u32;
     // The picture on show is that of the frame the machine is at (nothing moved it since): only then are the frames
     // that follow drawn from where it left off
@@ -1575,7 +1578,7 @@ fn window_frames(
     state.continuous = started;
     let mut rounds = 0_u32;
     for round in 0..burst {
-        if round > 0 && !state.hd.as_ref().is_some_and(hd::Hd::busy) {
+        if round > 0 && !state.hd.as_ref().is_some_and(behind_curtain) {
             break;
         }
         frames_run += run_frames(state, machine, session, symbols, pad, audio, frames)?;

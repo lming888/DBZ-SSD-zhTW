@@ -155,9 +155,6 @@ pub enum Next {
 /// Frames a step waits for its state after a press: a press shows within a few frames, a screen or a
 /// message within tens.
 pub const SETTLE_FRAMES: u32 = 150;
-/// Frames a command-window press (`Until::Taken`) waits before retrying if the original ignored it,
-/// short enough to avoid bursting seconds of audio while retrying.
-const COMMAND_SETTLE: u32 = 8;
 /// Frames the menu may take to be ready for a press (its opening takes about 20).
 pub const READY_FRAMES: u32 = 600;
 /// Frames a press holds its button: two, then the release on the third frame.
@@ -403,8 +400,6 @@ impl Player {
                     return Next::Frame(pad(None));
                 }
                 Phase::Settle { until, waited } => {
-                    let settle_limit =
-                        if until == Until::Taken { COMMAND_SETTLE } else { SETTLE_FRAMES };
                     if satisfied(probe, until) {
                         // A row step is not done until its cursor is on the row: check again.
                         if matches!(
@@ -418,7 +413,7 @@ impl Player {
                         } else {
                             self.advance();
                         }
-                    } else if waited >= settle_limit {
+                    } else if waited >= SETTLE_FRAMES {
                         // A press on a command or Item sheet that the original did not take (it takes one only
                         // some of the time, just after its window is drawn) is repeated: no state
                         // changed, so the repeat is the same press.
@@ -791,10 +786,8 @@ mod tests {
         let mut player = Player::new(vec![Step::Press { button: Button::A, until: Until::Taken }]);
         let mut a_presses = 0;
         let mut prev_a = false;
-        let mut frames = 0;
         let mut outcome = None;
-        for _ in 0..40 {
-            frames += 1;
+        for _ in 0..200 {
             let wram = menu.wram();
             let probe = MenuProbe::new(&wram, &labels);
             match player.next(&probe) {
@@ -818,12 +811,49 @@ mod tests {
             }
         }
         assert_eq!(a_presses, 2, "retried once after the first A was dropped");
-        assert!(
-            frames <= 25,
-            "retry happens quickly ({frames} frames) without an audio-stalling burst"
-        );
         assert_eq!(outcome, Some(Outcome::Reached));
         assert!(menu.message, "Talk dialogue opened instead of closing the menu");
+    }
+
+    #[test]
+    fn a_delayed_command_response_is_not_retried_prematurely() {
+        let mut menu = open_menu();
+        let labels = ssd_menus::Labels::default();
+        let mut player = Player::new(vec![Step::Press { button: Button::A, until: Until::Taken }]);
+        let mut a_presses = 0;
+        let mut prev_a = false;
+        let mut frames_since_first_a = 0;
+        let mut outcome = None;
+        for _ in 0..100 {
+            let wram = menu.wram();
+            let probe = MenuProbe::new(&wram, &labels);
+            match player.next(&probe) {
+                Next::Frame(pad) => {
+                    if pad.a && !prev_a {
+                        a_presses += 1;
+                    }
+                    prev_a = pad.a;
+                    // Withhold the state change for 20 frames (> old 8-frame COMMAND_SETTLE) after
+                    // the first press, then apply it without ever sending a second A.
+                    if a_presses == 1 && !pad.a {
+                        frames_since_first_a += 1;
+                    }
+                    if frames_since_first_a == 20 {
+                        menu.message = true;
+                        menu.busy = true;
+                    }
+                    menu.tick(Joypad::default());
+                }
+                Next::Done(done) => {
+                    outcome = Some(done);
+                    break;
+                }
+                Next::Stage(_) | Next::Lift => {}
+            }
+        }
+        assert_eq!(a_presses, 1, "must wait for a delayed response instead of sending a second A");
+        assert_eq!(outcome, Some(Outcome::Reached));
+        assert!(menu.message, "the dialogue opened from the single A press");
     }
 
     #[test]

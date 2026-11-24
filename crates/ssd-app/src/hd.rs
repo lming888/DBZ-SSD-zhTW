@@ -448,6 +448,12 @@ impl Hd {
         self.driver.busy()
     }
 
+    /// Whether the running HD plan should run at [`crate::app::HD_BURST`] speed (see [`Driver::bursts`]).
+    #[must_use]
+    pub fn bursts(&self) -> bool {
+        self.driver.bursts()
+    }
+
     /// Whether the field is free: no menu has the curtain and no press is under way. Then the picture the window shows
     /// is the game's own and may be drawn a frame late.
     #[must_use]

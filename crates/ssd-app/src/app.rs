@@ -1317,8 +1317,10 @@ fn breakpoint_stop(
     state.step_once = false;
 }
 
-/// Masks A/B held while in an HD menu (or while its press plan runs) until physically released, so neither
-/// `turbo` nor the game receives a stray confirm/cancel press when the curtain lifts or closes.
+/// Masks physical A/B held while in an HD menu (`Curtain::Up`) or while its press plan runs
+/// (`hd.busy()`), before `turbo` sees the joypad and until physically released. Without this
+/// pre-turbo layer, Turbo A/B would pulse the held button off and on, bypassing `Driver`'s own
+/// post-turbo swallow latch (which still remains for direct `Driver::frame` callers).
 fn swallow_hd_buttons(state: &mut WindowState, raw: Joypad) -> Joypad {
     let mut out = raw;
     let Some(hd) = state.hd.as_ref() else {
@@ -1565,12 +1567,12 @@ fn window_frames(
     if let Some(hd) = state.hd.as_ref() {
         audio.set_settings(AudioSettings::from_values(&hd.driver().options().pc));
     }
-    // A choice of the HD menu runs its presses behind the curtain: as many frames as it
-    // takes, in one go, without waiting for the clock or drawing them. Once the curtain lifts
-    // onto the game's own screen (Talk, Look, Fly, Land, or the Use box), return to paced frames
-    // so audio never bursts or runs dry.
-    let behind_curtain = |hd: &hd::Hd| hd.busy() && hd.driver().curtain() == Curtain::Up;
-    let burst = if state.hd.as_ref().is_some_and(behind_curtain) { HD_BURST } else { 1 };
+    // A choice of the HD menu runs its presses behind the curtain (and for non-Talk/Look lifted
+    // flows such as Fly, Land, Use, and battle auto-pick): as many frames as it takes, in one go,
+    // without waiting for the clock or drawing them. Once Talk or Look lifts the curtain onto the
+    // original's command window (`Until::Taken`), return to 1x paced frames so waiting or retrying
+    // never bursts or starves audio.
+    let burst = if state.hd.as_ref().is_some_and(hd::Hd::bursts) { HD_BURST } else { 1 };
     let mut frames_run = 0_u32;
     // The picture on show is that of the frame the machine is at (nothing moved it since): only then are the frames
     // that follow drawn from where it left off
@@ -1578,7 +1580,7 @@ fn window_frames(
     state.continuous = started;
     let mut rounds = 0_u32;
     for round in 0..burst {
-        if round > 0 && !state.hd.as_ref().is_some_and(behind_curtain) {
+        if round > 0 && !state.hd.as_ref().is_some_and(hd::Hd::bursts) {
             break;
         }
         frames_run += run_frames(state, machine, session, symbols, pad, audio, frames)?;
@@ -5167,10 +5169,58 @@ mod tests {
         }
 
         // Physical release clears the swallow latch so the next press passes through to turbo.
-        let released = swallow_hd_buttons(&mut state, Joypad::default());
-        assert!(!released.a);
+        let _ = swallow_hd_buttons(&mut state, Joypad::default());
         assert!(!state.hd_swallow_a);
         let next_press = swallow_hd_buttons(&mut state, held_a);
         assert!(next_press.a);
+    }
+
+    #[test]
+    fn swallow_hd_buttons_masks_held_b_across_turbo_and_idle_curtain_up() {
+        let mut state =
+            WindowState::new(Controls::new(HooksArg::Original, HooksSwitch::Allowed, false, false));
+        state.hd = Some(Hd::for_test());
+        {
+            let hd = state.hd.as_mut().unwrap();
+            hd.pc_options_mut().set(ssd_menus::options::controls::TURBO_MODE, 2); // Turbo B
+            // Advance open() until the menu reaches Curtain::Up with no running plan (!hd.busy()).
+            hd.open();
+            let mut wram = vec![0_u8; 0x2_0000];
+            for _ in 0..200 {
+                let frame = hd.frame(&wram, None, Joypad::default());
+                if frame.pad.a {
+                    wram[(ssd_game::data::FIELD_STATE - 0x7E_0000) as usize] = 1;
+                    wram[(ssd_game::data::MENU_DRAW_DONE - 0x7E_0000) as usize] = 0x80;
+                }
+                if hd.driver().curtain() == Curtain::Up && !hd.busy() {
+                    break;
+                }
+            }
+            assert_eq!(hd.driver().curtain(), Curtain::Up);
+            assert!(!hd.busy());
+        }
+
+        let held_b = Joypad { b: true, ..Joypad::default() };
+        // Curtain::Up alone (even when !hd.busy()) latches and masks held B.
+        let masked = swallow_hd_buttons(&mut state, held_b);
+        assert!(!masked.b);
+        assert!(state.hd_swallow_b);
+
+        // Dropping back to Curtain::Down while B stays physically held keeps Turbo B masked.
+        state.hd.as_mut().unwrap().reset();
+        for _ in 0..10 {
+            let out = swallow_hd_buttons(&mut state, held_b);
+            let settings = crate::turbo::Settings::from_values(
+                &state.hd.as_ref().unwrap().driver().options().pc,
+            );
+            let pulsed = state.turbo.step(settings, out);
+            assert!(!pulsed.b, "turbo must not pulse B before physical release");
+        }
+
+        // Physical release clears the swallow latch so the next B press passes through.
+        let _ = swallow_hd_buttons(&mut state, Joypad::default());
+        assert!(!state.hd_swallow_b);
+        let next_press = swallow_hd_buttons(&mut state, held_b);
+        assert!(next_press.b);
     }
 }

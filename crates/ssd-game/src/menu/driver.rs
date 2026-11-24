@@ -72,6 +72,10 @@ enum Arrival {
 struct Running {
     player: Player,
     arrival: Arrival,
+    /// Talk/Look waits for `Until::Taken` after `Step::Lift` reveals the original's command menu;
+    /// once lifted, the host steps at 1x speed instead of bursting so waiting or retrying does not
+    /// overflow the audio queue.
+    pace_when_lifted: bool,
 }
 
 /// How the bag is bound: by the driver itself, from the save and the sidecar, or by a replay's
@@ -188,7 +192,10 @@ struct State {
     travel_lifted: bool,
     /// Frames after `field_free()` turns true during which NMI finishes clearing BG1/BG3 tilemaps.
     travel_tail: u8,
-    /// Confirm/Cancel held by the player when a plan finished, masked until released so it does not leak to the game.
+    /// Fallback confirm/cancel swallow mask inside the driver (for direct `Driver::frame` callers
+    /// without the app host's pre-turbo `swallow_hd_buttons`): tracks buttons still held after a
+    /// plan hands control back to the game until released. Note that `ssd-app` passes post-turbo
+    /// input here after already masking physical A/B before `turbo`.
     swallow_a: bool,
     swallow_b: bool,
 }
@@ -597,6 +604,18 @@ impl Driver {
     #[must_use]
     pub fn busy(&self) -> bool {
         self.state.running.is_some()
+    }
+
+    /// Whether the running plan should burst in the window loop (`HD_BURST`): `true` for every
+    /// running plan behind `Curtain::Up`, and for non-Talk/Look lifted plans (Fly, Land, Use, and
+    /// battle `pick_steps`). Returns `false` once `Talk` or `Look` lifts the curtain (`Until::Taken`)
+    /// so waiting or retrying runs at 1x speed without bursting audio.
+    #[must_use]
+    pub fn bursts(&self) -> bool {
+        let Some(running) = self.state.running.as_ref() else {
+            return false;
+        };
+        !(self.state.curtain == Curtain::Lifted && running.pace_when_lifted)
     }
 
     /// What the last plan that ended reached, if one has ended.
@@ -1775,7 +1794,9 @@ impl State {
     }
 
     fn start(&mut self, steps: Vec<Step>, arrival: Arrival) {
-        self.running = Some(Running { player: Player::new(steps), arrival });
+        let pace_when_lifted =
+            steps.iter().any(|step| matches!(step, Step::Press { until: Until::Taken, .. }));
+        self.running = Some(Running { player: Player::new(steps), arrival, pace_when_lifted });
     }
 
     /// The curtain follows the menu the player opens or closes, when no plan runs.
@@ -3960,5 +3981,89 @@ mod tests {
         assert!(out.a, "a fresh press after release reaches the dialogue");
         frame(&mut driver, &mut menu, Joypad::default());
         assert_eq!(driver.curtain(), Curtain::Down, "the fresh A closed the dialogue");
+    }
+
+    #[test]
+    fn bursts_only_pauses_after_talk_or_look_lifts_the_curtain() {
+        // Talk: bursts behind Curtain::Up if still waiting, then pauses bursting once lifted.
+        let mut driver = Driver::new(Labels::default());
+        let mut menu = FakeMenu::default();
+        open_by_player(&mut driver, &mut menu);
+        driver.key(Key::Confirm, &menu.wram());
+        assert!(driver.bursts(), "Talk starts behind Curtain::Up");
+        for _ in 0..20 {
+            let pad = driver.frame(&menu.wram(), None, Joypad::default()).pad;
+            menu.tick(pad);
+            if driver.curtain() == Curtain::Lifted {
+                break;
+            }
+        }
+        assert_eq!(driver.curtain(), Curtain::Lifted);
+        if driver.busy() {
+            assert!(!driver.bursts(), "Talk stops bursting once the curtain lifts");
+        }
+
+        // Look: moves cursor behind Curtain::Up (bursting), then drops burst after Step::Lift.
+        let mut driver = Driver::new(Labels::default());
+        let mut menu = FakeMenu::default();
+        open_by_player(&mut driver, &mut menu);
+        driver.key(Key::Down, &menu.wram());
+        driver.key(Key::Confirm, &menu.wram());
+        assert!(driver.bursts(), "Look starts behind Curtain::Up while moving the cursor");
+        let mut saw_lifted_unbursted = false;
+        for _ in 0..40 {
+            let pad = driver.frame(&menu.wram(), None, Joypad::default()).pad;
+            if driver.curtain() == Curtain::Lifted && driver.busy() {
+                assert!(!driver.bursts(), "Look stops bursting once the curtain lifts");
+                saw_lifted_unbursted = true;
+                break;
+            }
+            menu.tick(pad);
+        }
+        assert!(saw_lifted_unbursted, "Look lifted before pressing A");
+
+        // Fly (non-Talk/Look lifted plan): keeps bursting even after Curtain::Lifted.
+        let mut driver = Driver::new(Labels::default());
+        let mut menu = FakeMenu::default();
+        open_by_player(&mut driver, &mut menu);
+        driver.key(Key::Down, &menu.wram());
+        driver.key(Key::Down, &menu.wram());
+        driver.key(Key::Confirm, &menu.wram());
+        let mut saw_lifted_burst = false;
+        for _ in 0..60 {
+            let pad = driver.frame(&menu.wram(), None, Joypad::default()).pad;
+            if driver.curtain() == Curtain::Lifted && driver.busy() {
+                assert!(driver.bursts(), "Fly keeps bursting after lifting the curtain");
+                saw_lifted_burst = true;
+                break;
+            }
+            menu.tick(pad);
+        }
+        assert!(saw_lifted_burst, "Fly lifted while pressing A");
+
+        // Battle auto-pick (`pick_steps`): keeps bursting even though curtain is Lifted.
+        let mut driver = Driver::new(battle_labels());
+        let mut menu = FakeMenu::default();
+        menu.battle = true;
+        menu.field = 2;
+        menu.busy = true;
+        let wram = {
+            use crate::mods::state::{PICK_AT, PICK_ITEM_AT, PICK_MARKER, PICK_ROW_AT};
+            let mut ram = menu.wram();
+            let put = |ram: &mut [u8], addr: u32, val: u8| ram[(addr - 0x7E_0000) as usize] = val;
+            put(&mut ram, d::MENU_SCREEN, 2);
+            put(&mut ram, d::MENU_STEP, 4);
+            put(&mut ram, d::MENU_DRAW_DONE, 0x80);
+            put(&mut ram, d::MENU_ITEM_ID, 2);
+            let pick_base = (PICK_AT - 0x7E_0000) as usize;
+            ram[pick_base..pick_base + 4].copy_from_slice(&PICK_MARKER);
+            put(&mut ram, PICK_ITEM_AT, 2);
+            put(&mut ram, PICK_ROW_AT, 2);
+            ram
+        };
+        driver.state.curtain = Curtain::Lifted;
+        let _ = driver.frame(&wram, None, Joypad::default());
+        assert!(driver.busy(), "pick_steps started");
+        assert!(driver.bursts(), "battle pick_steps keeps bursting");
     }
 }

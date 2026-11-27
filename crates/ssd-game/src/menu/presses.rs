@@ -833,8 +833,8 @@ mod tests {
                         a_presses += 1;
                     }
                     prev_a = pad.a;
-                    // Withhold the state change for 20 frames (> old 8-frame COMMAND_SETTLE) after
-                    // the first press, then apply it without ever sending a second A.
+                    // Withhold the state change for 20 frames (a multi-frame delay before the
+                    // original reacts) after the first press, then apply it without sending a second A.
                     if a_presses == 1 && !pad.a {
                         frames_since_first_a += 1;
                     }

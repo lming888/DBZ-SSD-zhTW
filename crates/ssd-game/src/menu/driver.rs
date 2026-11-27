@@ -3999,9 +3999,8 @@ mod tests {
             }
         }
         assert_eq!(driver.curtain(), Curtain::Lifted);
-        if driver.busy() {
-            assert!(!driver.bursts(), "Talk stops bursting once the curtain lifts");
-        }
+        assert!(driver.busy(), "Talk is still waiting to finish after lifting the curtain");
+        assert!(!driver.bursts(), "Talk stops bursting once the curtain lifts");
 
         // Look: moves cursor behind Curtain::Up (bursting), then drops burst after Step::Lift.
         let mut driver = Driver::new(Labels::default());

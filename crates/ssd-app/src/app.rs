@@ -5182,7 +5182,7 @@ mod tests {
         state.hd = Some(Hd::for_test());
         {
             let hd = state.hd.as_mut().unwrap();
-            hd.pc_options_mut().set(ssd_menus::options::controls::TURBO_MODE, 2); // Turbo B
+            hd.pc_options_mut().set(ssd_menus::options::controls::TURBO_MODE, 2); // Turbo A+B
             // Advance open() until the menu reaches Curtain::Up with no running plan (!hd.busy()).
             hd.open();
             let mut wram = vec![0_u8; 0x2_0000];
@@ -5206,7 +5206,7 @@ mod tests {
         assert!(!masked.b);
         assert!(state.hd_swallow_b);
 
-        // Dropping back to Curtain::Down while B stays physically held keeps Turbo B masked.
+        // Dropping back to Curtain::Down while B stays physically held keeps Turbo A+B masked.
         state.hd.as_mut().unwrap().reset();
         for _ in 0..10 {
             let out = swallow_hd_buttons(&mut state, held_b);
